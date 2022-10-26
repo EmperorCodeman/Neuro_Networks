@@ -1,0 +1,6 @@
+<<<<<<< HEAD
+#   Do not load the huge data sets onto the git server. ie ignore it
+=======
+#   Do not load the huge data sets onto the git server. ie ignore it
+>>>>>>> 7419623a91a969eac7082c09d54baf27800cf7f0
+data_sets/

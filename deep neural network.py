@@ -1,0 +1,262 @@
+import numpy as np
+from PIL import Image
+
+"""
+    Realizations:
+        If the input does not have geometric meaning. Ie if the positions of cells has no meaning then input should be 1D. 
+            2D is a batch operation of 1D matricies where each column of parshed input has no interaction with other columns no matter the depth. Unless you transpose after each layer. which is bad
+        For geometric data, we need the relationship between regions. Thus the filters. Filters are nXmX3 for images. Use padding or center of image has more weight. Use n and m as odd so filter centers on pixel
+            Then output forms a tensor which a new tensor filter goes over post max pool
+        Dnn is for logic
+            1D input is independent vars, 1d output from layer 1 is dependent vars. Where each var factors all inpdependent vars. subsiquent layers abstract dependent vars further into higher and higher level inference
+                example, grades on everything for student. Layer 1 output is hw average, quiz average, test average, subject competincies. layer 2 ouput is course grade, carrier path readiness... etc. Layer 3 output is recommeded action for student  
+            Thus a Dnn in classical function theory is called a Composition of functions. 
+                where each neuron is a function and each next layer is a compositon of those functions
+        A Dnn layer is a transformation from one feature space to another. 
+            thus after the network is trained. Simply its architicture by doing principal component analysis maybe
+            or as you understand. Use linear algebra to remove duplicate rows of layer(perceptrons). ie two rows that are not independent. 
+            Remove any row that can be composed from other rows.  
+        
+    We are seeing various ways of optimizing the weights 
+    Systems of non linear equations. Set gradient of loss function to zero and solve. 
+    Interpolate the loss function with cubic spline interpolation then solve for interpolated roots 
+    gradient descent 
+    Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize 
+
+    TODO Use induction to differentiate any dnn
+"""
+
+class DNN:
+    def __init__(self, neurons_per_layer, data):
+        """
+            We initiate our DNN with supervised learning. Passing it our data class. 
+            We also pass it a architecture shape. Neurons per layer infers the architecture by liner algebra syntax
+            We express layers as a single variable.
+                Using this substituition we are able to perform abstract calculus that is independent of layers shape
+                Thus chose any shape architecture and we can infer the gradients
+            Neurons/Layer: Parse first layer first, then all hidden layers. 
+                Last layer is defined by data set. so do not parse it in Neurons per layer arg
+
+            We use reLU as the only activation function, always activating between hidden layers 
+        """
+
+        def initialize_layer(neurons_count, last_layers_rows):
+            #   Initialize weights as from uniform distribution between -1, and 1
+            return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows)
+
+        self.data = data #  Attach data set to DNN. You can switch data set at any time for transfer learning
+        #   Note: The test and train data have the same shapes in the second dimension. 
+        input_layer = initialize_layer(neurons_per_layer[0], data.test_data.shape[1])
+        layers = [input_layer]
+        for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers
+            layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
+        #   Init the final layer. It conforms its shape entirely and is not programable
+        layers.append(initialize_layer(data.test_supervision.shape[1], neurons_per_layer[-1]))
+        self.layers = layers
+
+    @staticmethod
+    def reLU(dendritic_input):
+        #   Build the activation Function
+        #   Model the Neuro Synapse with reLU function. If dendritic input is greater than 0 then fire neuron
+        return dendritic_input * (dendritic_input > 0) 
+
+    @staticmethod
+    def reLU_primed(dendritic_input):
+        #   The derivitave of pairwise function is a pairwise derivative. Simply its the derivitive of each of the functions it directs to 
+        #   In this case. x or 0. Thus its derivitive is 1 or 0 
+        return np.ones_like(dendritic_input) * (dendritic_input > 0)
+
+    def feed_forward(self, input):
+        #   Move through the network 
+
+        #   Parse independent vars, ie observation into the networks first layer and process activation func if network is has hidden layers 
+        if len(self.layers) > 1:
+            flow = DNN.reLU( self.layers[0] @ input )
+        
+        #   Flow and use activation function for all hiden layers
+        for layer in self.layers[1:-1]:
+            flow = DNN.reLU( layer @ flow )
+        
+        #   Forgo activation function on the last function 
+        flow = self.layers[-1] @ flow
+
+        #   TODO use softmax optionally at end of last layer for classification
+        return flow.reshape(len(flow),1)
+
+    def get_loss(self, input, supervision):
+        residual = self.feed_forward(input) - supervision
+        return np.sum( (residual**2) / 2) 
+ 
+    def get_gradient(self, batch, supervision):
+        #   2 layers only supported currently 
+        #   TODO NOTE each layer can be optimized on its own thread. no lock needed. the other layers will be updated as they do. residual only updated once per master loop 
+        residual = self.feed_forward(batch) - supervision 
+        layer_1_output = self.layers[0] @ batch
+        gradient_layer_1 = self.layers[1].transpose() @ residual @ DNN.reLU_primed( batch.transpose() ) 
+        gradient_layer_2 = residual @ DNN.reLU(layer_1_output.transpose()) 
+        return [gradient_layer_1, gradient_layer_2]
+
+    def fit(self, epochs, data, supervision):
+        def delta_loss(layer_index, step_magnitude, last_loss, buffered_layer):
+            #   Only a temp update of the layer
+            self.layers[i] = buffered_layer - step_magnitude * gradient[i]
+            perspective_loss = self.get_loss(data, supervision)
+            delta_loss = perspective_loss - last_loss #  Note: The loss is always positive. Thus delta loss is [0,original_loss]
+            return delta_loss, perspective_loss
+
+        def get_parabola_min(three_input, three_outpute):
+            """
+                A parabala is: Y = ax^2 + bx + c
+                Algebra to vertex form is: Y = a(x - h)^2 + k   Where h is the x of the vertex and k is its y
+                To solve we have 2 equations with two unknowns for polynomial form, because C is always 0   
+                    The first point is always (0,0) thus C the y intercept is always 0 in this case
+                We set the the system, invert it then matrix multiply to get a and b. Then use algebra to solve for the vertex
+            """
+            system_of_equations = np.array([\
+                [three_input[1]**2, three_input[1]],\
+                [three_input[2]**2, three_input[2]]
+                ]) 
+            a_and_b = np.linalg.inv(system_of_equations) @ three_outpute[1:]
+            vertex_x = -a_and_b[1] / (2* a_and_b[0]) 
+
+            #   Algebracially we can solve for everthing so no need to process inverse matrix ect. 
+            x2, x3 = three_input[1:]
+            y2, y3 = three_outpute[1:]
+            denom = -x2(-x3)(x2 - x3)
+            A = (x3 * (y2) + x2 * (- y3)) / denom
+            B = (x3^2 * (- y2) + x2^2 * (y3)) / denom
+            vertex_x = -B / (2*A)
+            return vertex_x
+
+        last_steps = [1] * len(self.layers) # Store the last step length for each layer. Then line search from there 
+        last_losses = [self.get_loss(data, supervision)] * len(self.layers) #   Store the last epochs loss for  
+        for ii in range(epochs): # TODO cycle batches
+            gradient = self.get_gradient(data, supervision)
+            for i, layer_gradient in enumerate(gradient):
+                """   
+                    Now we do a line search inorder to find a productive step size for the gradient descent. 
+                    F(step size) = change in loss from last epoch due to step size 
+                        We want to find the minumum. Where negative change is good. B - A                        
+                        We know that the change in loss for 0 step size is 0.
+                            If we find 2 more points we can create a parabala 
+                            Note: We know that the parabala starts negative by gradient theory. Tangent line at point of tangential
+                            Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
+                            Thus we chose the three points closest to zero
+                            We loop with our exit condition being finding a negative false of F(step size). plus one try in direction of its success
+
+                """
+                
+                buffered_layer = self.layers[i] 
+                d_loss, perspective_loss = delta_loss(i, last_steps[i], last_losses[i], buffered_layer)
+                loop_count = 0
+                while (d_loss >= 0 and loop_count < 25): #  While there is no improvement with step length, half the step and check again
+                    last_steps[i] *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
+                    #self.layers[i] = buffered_layer
+                    d_loss, perspective_loss = delta_loss(i, last_steps[i], last_losses[i], buffered_layer)
+                    loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
+                    if d_loss == 0:
+                        #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
+                        #   This is a fatal error. We resolve it be poorly by stepping very spall 
+                        last_steps[i] = .000001
+                        d_loss, perspective_loss = delta_loss(i, last_steps[i], last_losses[i], buffered_layer)
+                        break
+
+
+                parabala_points_x = [0, last_steps[i],   last_steps[i]*1.5] 
+                d_l_, upstep_loss = delta_loss(i, parabala_points_x[2], last_losses[i] ,buffered_layer)
+                parabala_points_y = [0, d_loss, d_l_]
+                parabala_points_loss = [last_losses[0], perspective_loss, upstep_loss]
+
+                #   Parabalas need three non linear points. X points will always be different
+                if parabala_points_y[1] == parabala_points_y[2]: 
+                    best_step_index = 1
+                else:
+                    #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
+                    parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
+                    delta_loss_parabala, parabala_loss = delta_loss(i, parabala_step, last_losses[i], buffered_layer)
+                    
+                    #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
+                    parabala_points_x.append(parabala_step)
+                    parabala_points_y.append(delta_loss_parabala)
+                    parabala_points_loss.append(parabala_loss)
+                    best_step_index = np.argmin(parabala_points_y)
+
+                if parabala_points_x[best_step_index] == 0: 
+                    #   Insure that the step size is never 0
+                    break # The network is perfectly fit to training data or there is a error in the logic 
+
+                #   Finalize
+                last_steps[i] = parabala_points_x[best_step_index]
+                last_losses[i] = parabala_points_loss[best_step_index]
+                self.layers[i] = buffered_layer - parabala_points_x[best_step_index] * layer_gradient
+
+                print("Layer: " + str(i+1) + "\n\t Step Size: " + str(last_steps[i]) + "\t Loss: " + str(last_losses[i]))
+        
+        print("Final Output: " + str(self.feed_forward(data)))
+
+    def temp_fit(self, epochs, data, supervision):
+        step_size = 1
+        for epoch in range(epochs):
+            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------")
+            gradients = self.get_gradient(data, supervision)
+            for i, layers_gradient in enumerate(gradients):
+                gradients_magnitude = np.sum(layers_gradient**2)**.5
+                if gradients_magnitude == 0: continue
+                layers_gradient = layers_gradient / gradients_magnitude #   Normalize
+                self.layers[i] -= step_size * layers_gradient
+                loss = self.get_loss(data, supervision)
+                print("Layer: " + str(i+1) + "\n\tLoss: " + str(loss))
+                if loss < 0.01: return 
+                
+class MNIST:
+    def __init__(self) -> None:
+
+        def normalize_tensor(tensor):
+            #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
+            active_pixels = tensor != 0
+            z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
+            tensor = np.zeros_like(tensor, dtype=float)
+            tensor[active_pixels] = z_scores_of_pixels
+            return tensor
+
+        def load_data_from_csv(file_location):
+            """
+                CSV Format: row at image. row 1 as header. Column one as solution lable. 
+            """
+
+            data = np.genfromtxt(file_location, delimiter=',', dtype=np.uint8)[1:] #    First Row is Gumbo     
+            #   Pause here and call images if you want. Before normalization
+            #MNIST.show_image_from_row(data.test_data, 0)
+
+            #   Solution as a one hot vector. In MNIST we have 0-9 as labels. We put the position of the output neurons as the value of the label
+            supervision = np.zeros(shape=(len(data), 10, 1))
+            supervision[range(len(data)), data[:,0], :] = 1
+
+            #   Normalize the inpute to keep it close to activation value 0
+            data = normalize_tensor(data[:,1:]) # Remove Label
+
+            return data, supervision
+
+        self.test_data, self.test_supervision = load_data_from_csv('data sets/mnist_test.csv')
+
+    @staticmethod
+    def show_image_from_row(data, row):
+        image = data[row,1:].reshape(28,28) #   Skip label
+        #   Image will not work unless dtype is uint8
+        image = np.repeat(image[:,:,np.newaxis], 3, axis=2).astype(np.uint8) #   RGB repeat for black and white                
+        Image.fromarray(image, 'RGB').show()
+        #Image.fromarray(image, 'RGB').save("temp/random.jpg")
+        print("\nLable for image: " + str(data[row,0]))
+                
+
+data = MNIST()
+
+neurons_per_layer = [100] # First layers neuron count. Second layer defined implicitly
+dnn = DNN(neurons_per_layer, data=data)
+
+first_image = data.test_data[0][:,np.newaxis]
+
+dnn.temp_fit(epochs=10000, data=first_image, supervision=data.test_supervision[0])
+
+
+i = 2
