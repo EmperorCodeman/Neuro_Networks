@@ -248,7 +248,9 @@ class MNIST:
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
 
-#   Do the math on batch processing.             
+#   Do the math on batch processing. 
+#   Code out batching. Move to automation. no parameters for data. just batch size. 
+#   Math will show inter batch order does not matter thus use a window for batching             
 
 data = MNIST()
 
