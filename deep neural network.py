@@ -108,29 +108,33 @@ class DNN:
             """
                 A parabala is: Y = ax^2 + bx + c
                 Algebra to vertex form is: Y = a(x - h)^2 + k   Where h is the x of the vertex and k is its y
-                To solve we have 2 equations with two unknowns for polynomial form, because C is always 0   
+                To solve we have 2 equations with two unknowns for polynomial form, because C is always 0 due to 0 step causing 0 delta loss ie 0 y intercept  
                     The first point is always (0,0) thus C the y intercept is always 0 in this case
-                We set the the system, invert it then matrix multiply to get a and b. Then use algebra to solve for the vertex
+                We set the system, invert it then matrix multiply to get a and b. Then use algebra to solve for the vertex
             """
-            system_of_equations = np.array([\
-                [three_input[1]**2, three_input[1]],\
-                [three_input[2]**2, three_input[2]]
-                ]) 
-            a_and_b = np.linalg.inv(system_of_equations) @ three_outpute[1:]
-            vertex_x = -a_and_b[1] / (2* a_and_b[0]) 
+            """
+                #   This is the linear algebra process to obtain the vertex
+                system_of_equations = np.array([\
+                    [three_input[1]**2, three_input[1]],\
+                    [three_input[2]**2, three_input[2]]
+                    ]) 
+                a_and_b = np.linalg.inv(system_of_equations) @ three_outpute[1:]
+                vertex_x = -a_and_b[1] / (2* a_and_b[0]) 
+            """
 
-            #   Algebracially we can solve for everthing so no need to process inverse matrix ect. 
+            #   Algebracially we can solve for the vertex using variables. So no need to process inverse matrix ect. 
             x2, x3 = three_input[1:]
             y2, y3 = three_outpute[1:]
-            denom = -x2(-x3)(x2 - x3)
+            denom = -x2*(-x3)*(x2 - x3)
             A = (x3 * (y2) + x2 * (- y3)) / denom
-            B = (x3^2 * (- y2) + x2^2 * (y3)) / denom
+            B = (x3**2 * (- y2) + x2**2 * (y3)) / denom
             vertex_x = -B / (2*A)
             return vertex_x
 
         last_steps = [1] * len(self.layers) # Store the last step length for each layer. Then line search from there 
         last_losses = [self.get_loss(data, supervision)] * len(self.layers) #   Store the last epochs loss for  
-        for ii in range(epochs): # TODO cycle batches
+        for epoch in range(epochs): # TODO cycle batches
+            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
             gradient = self.get_gradient(data, supervision)
             for i, layer_gradient in enumerate(gradient):
                 """   
@@ -139,10 +143,12 @@ class DNN:
                         We want to find the minumum. Where negative change is good. B - A                        
                         We know that the change in loss for 0 step size is 0.
                             If we find 2 more points we can create a parabala 
-                            Note: We know that the parabala starts negative by gradient theory. Tangent line at point of tangential
+                            Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
                             Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
                             Thus we chose the three points closest to zero
-                            We loop with our exit condition being finding a negative false of F(step size). plus one try in direction of its success
+                            We loop with our exit condition being finding a negative value of F(step size). 
+                        Lastly we step 1.5 times the magnitude of known productive step. 
+                        This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
 
                 """
                 
@@ -156,10 +162,10 @@ class DNN:
                     loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
                     if d_loss == 0:
                         #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
-                        #   This is a fatal error. We resolve it be poorly by stepping very spall 
+                        #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
                         last_steps[i] = .000001
                         d_loss, perspective_loss = delta_loss(i, last_steps[i], last_losses[i], buffered_layer)
-                        break
+                        raise Exception("Network is Zeroed out from reLU")
 
 
                 parabala_points_x = [0, last_steps[i],   last_steps[i]*1.5] 
@@ -191,8 +197,7 @@ class DNN:
                 self.layers[i] = buffered_layer - parabala_points_x[best_step_index] * layer_gradient
 
                 print("Layer: " + str(i+1) + "\n\t Step Size: " + str(last_steps[i]) + "\t Loss: " + str(last_losses[i]))
-        
-        print("Final Output: " + str(self.feed_forward(data)))
+                if last_losses[i] < 0.01: return
 
     def temp_fit(self, epochs, data, supervision):
         step_size = 1
@@ -250,10 +255,11 @@ class MNIST:
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
 
-#   Do the math on batch processing. 
+#   descent all layers in one step
 #   Code out batching. Move to automation. no parameters for data. just batch size. 
 #   Math will show inter batch order does not matter thus use a window for batching             
-#   Switch back to reg fit from temp
+#   Add bias
+#   Add softmax activation to final layer
 
 data = MNIST()
 
@@ -263,7 +269,7 @@ dnn = DNN(neurons_per_layer, data=data)
 first_batch = data.test_data[:, :3]
 dnn.feed_forward(first_batch)
 
-dnn.temp_fit(epochs=10000, data=first_batch, supervision=data.test_supervision[:, :3])
+dnn.fit(epochs=10000, data=first_batch, supervision=data.test_supervision[:, :3])
 
 
 i = 2
