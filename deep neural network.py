@@ -46,12 +46,12 @@ class DNN:
 
         self.data = data #  Attach data set to DNN. You can switch data set at any time for transfer learning
         #   Note: The test and train data have the same shapes in the first dimension. 
-        input_layer = initialize_layer(neurons_per_layer[0], data.test_data.shape[0])
+        input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0])
         layers = [input_layer]
         for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
         #   Init the final layer. It conforms its shape entirely and is not programable
-        layers.append(initialize_layer(data.test_supervision.shape[0], neurons_per_layer[-1]))
+        layers.append(initialize_layer(data.train_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
 
     @staticmethod
@@ -96,7 +96,7 @@ class DNN:
         gradient_layer_2 = residual @ DNN.reLU(layer_1_output.transpose()) 
         return [gradient_layer_1, gradient_layer_2]
 
-    def fit(self, epochs, data, supervision):
+    def fit_(self, epochs, data, supervision):
         def delta_loss(layer_index, step_magnitude, last_loss, buffered_layer):
             #   Only a temp update of the layer
             self.layers[i] = buffered_layer - step_magnitude * gradient[i]
@@ -199,6 +199,114 @@ class DNN:
                 print("Layer: " + str(i+1) + "\n\t Step Size: " + str(last_steps[i]) + "\t Loss: " + str(last_losses[i]))
                 if last_losses[i] < 0.01: return
 
+    def fit(self):
+        def delta_loss(step_magnitude, last_loss, buffered_network):
+            #   Only a temp update of the layer
+            self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(gradient)]
+            perspective_loss = self.get_loss(batch, batch_supervision)
+            delta_loss = perspective_loss - last_loss #  Note: The loss is always positive. Thus delta loss is [0,original_loss]
+            return delta_loss, perspective_loss
+
+        def get_parabola_min(three_input, three_outpute):
+            """
+                A parabala is: Y = ax^2 + bx + c
+                Algebra to vertex form is: Y = a(x - h)^2 + k   Where h is the x of the vertex and k is its y
+                To solve we have 2 equations with two unknowns for polynomial form, because C is always 0 due to 0 step causing 0 delta loss ie 0 y intercept  
+                    The first point is always (0,0) thus C the y intercept is always 0 in this case
+                We set the system, invert it then matrix multiply to get a and b. Then use algebra to solve for the vertex
+            """
+            """
+                #   This is the linear algebra process to obtain the vertex
+                system_of_equations = np.array([\
+                    [three_input[1]**2, three_input[1]],\
+                    [three_input[2]**2, three_input[2]]
+                    ]) 
+                a_and_b = np.linalg.inv(system_of_equations) @ three_outpute[1:]
+                vertex_x = -a_and_b[1] / (2* a_and_b[0]) 
+            """
+
+            #   Algebracially we can solve for the vertex using variables. So no need to process inverse matrix ect. 
+            x2, x3 = three_input[1:]
+            y2, y3 = three_outpute[1:]
+            denom = -x2*(-x3)*(x2 - x3)
+            A = (x3 * (y2) + x2 * (- y3)) / denom
+            B = (x3**2 * (- y2) + x2**2 * (y3)) / denom
+            vertex_x = -B / (2*A)
+            return vertex_x
+
+        epochs_limit = 10000
+        batch = self.data.train_data[:, :3]
+        batch_supervision = self.data.train_supervision[:, :3]
+
+        last_step = 1
+        last_loss = self.get_loss(batch, batch_supervision) #   Store the last epochs loss for  
+        for epoch in range(epochs_limit): 
+            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
+            gradient = self.get_gradient(batch, batch_supervision)
+            
+            """   
+                Now we do a line search inorder to find a productive step size for the gradient descent. 
+                F(step size) = change in loss from last epoch due to step size 
+                    We want to find the minumum. Where negative change is good. B - A                        
+                    We know that the change in loss for 0 step size is 0.
+                        If we find 2 more points we can create a parabala 
+                        Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
+                        Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
+                        Thus we chose the three points closest to zero
+                        We loop with our exit condition being finding a negative value of F(step size). 
+                    Lastly we step 1.5 times the magnitude of known productive step. 
+                    This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
+
+            """
+            
+            buffered_network = self.layers 
+            d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+            loop_count = 0
+            while (d_loss >= 0 and loop_count < 30): #  While there is no improvement with step length, half the step and check again
+                last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
+                #self.layers[i] = buffered_layer
+                d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
+                if d_loss == 0:
+                    #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
+                    #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
+                    last_step = .000001
+                    d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                    raise Exception("Network is Zeroed out from reLU")
+
+            parabala_points_x = [0, last_step,   last_step*1.5] 
+            upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
+            parabala_points_y = [0, d_loss, upstep_delta_loss]
+            parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
+
+            #   Parabalas need three non linear points. X points will always be different
+            if parabala_points_y[1] == parabala_points_y[2]: 
+                best_step_index = 1
+            else:
+                #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
+                parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
+                delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                
+                #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
+                parabala_points_x.append(parabala_step)
+                parabala_points_y.append(delta_loss_parabala)
+                parabala_points_loss.append(parabala_loss)
+                best_step_index = np.argmin(parabala_points_y)
+
+            if parabala_points_x[best_step_index] == 0: 
+                #   Insure that the step size is never 0
+                break # The network is perfectly fit to training data or there is a error in the logic 
+
+            #   Finalize Step and prepair for next iteration
+            best_known_step = parabala_points_x[best_step_index] 
+            last_step = best_known_step
+            last_loss = parabala_points_loss[best_step_index]
+            self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
+            #self.layers = buffered_network - parabala_points_x[best_step_index] * gradient
+
+            print("\t Step Size: " + str(last_step) + "\t Loss: " + str(last_loss))
+            if last_loss < 0.01: return
+    
     def temp_fit(self, epochs, data, supervision):
         step_size = 1
         for epoch in range(epochs):
@@ -244,7 +352,7 @@ class MNIST:
 
             return data, supervision
 
-        self.test_data, self.test_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
 
     @staticmethod
     def show_image_from_row(data, row):
@@ -266,10 +374,9 @@ data = MNIST()
 neurons_per_layer = [100] # First layers neuron count. Second layer defined implicitly
 dnn = DNN(neurons_per_layer, data=data)
 
-first_batch = data.test_data[:, :3]
-dnn.feed_forward(first_batch)
+#dnn.feed_forward(first_batch)
 
-dnn.fit(epochs=10000, data=first_batch, supervision=data.test_supervision[:, :3])
+dnn.fit()
 
 
 i = 2
