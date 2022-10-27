@@ -237,7 +237,7 @@ class MNIST:
 
             return data, supervision
 
-        self.test_data, self.test_supervision = load_data_from_csv('data sets/mnist_test.csv')
+        self.test_data, self.test_supervision = load_data_from_csv('data_sets/mnist_test.csv')
 
     @staticmethod
     def show_image_from_row(data, row):
@@ -247,7 +247,8 @@ class MNIST:
         Image.fromarray(image, 'RGB').show()
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
-                
+
+#   Do the math on batch processing.             
 
 data = MNIST()
 
@@ -260,3 +261,27 @@ dnn.temp_fit(epochs=10000, data=first_image, supervision=data.test_supervision[0
 
 
 i = 2
+
+
+"""
+    Mini lecture:
+        Explain bias and how his solution created no need to change anything with bias
+            bias as a translation of the origin in feature space of layer
+        Feed forward as generalization, Feed backward as extrapolation, or dreaming 
+            Bi directional learning 
+        Goal: 
+            Jan starting school
+            Full Dnn
+            Hypothesis testing and thoery. Lets optimize batch size 
+            Data as a assest 
+            thought vectors and translation. One hot vector classification to thought vector classification
+            Memory short and long. brief modeling 
+                rnn review. 
+            Black Jack ok. Job interview had me do it. 
+                Dnn as ai
+                synthetic data set
+                include var for personality of player. risk aversion
+                    personality of user unknown to net. 
+                    memory needed inorder to case player and mesure player personality 
+
+"""
