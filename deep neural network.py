@@ -235,77 +235,88 @@ class DNN:
             return vertex_x
 
         epochs_limit = 10000
-        batch = self.data.train_data[:, :3]
-        batch_supervision = self.data.train_supervision[:, :3]
-
         last_step = 1
-        last_loss = self.get_loss(batch, batch_supervision) #   Store the last epochs loss for  
+        batch_size = 10 #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch
+
         for epoch in range(epochs_limit): 
             print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
-            gradient = self.get_gradient(batch, batch_supervision)
-            
-            """   
-                Now we do a line search inorder to find a productive step size for the gradient descent. 
-                F(step size) = change in loss from last epoch due to step size 
-                    We want to find the minumum. Where negative change is good. B - A                        
-                    We know that the change in loss for 0 step size is 0.
-                        If we find 2 more points we can create a parabala 
-                        Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
-                        Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
-                        Thus we chose the three points closest to zero
-                        We loop with our exit condition being finding a negative value of F(step size). 
-                    Lastly we step 1.5 times the magnitude of known productive step. 
-                    This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
+            for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
+                """
+                    i = batch iteration
+                    Iterate over the entire training data_set every epoch. 
+                    The batch size creates the size of the window. From there we increment each the window till the end of the set
+                    We optimize the weights every iteration, and we optimize the step size every iteration
+                    Use of np.random is explained below
+                    Lastly we randomize the sequence of iteration. I thought of this personally by this thinking:
+                        If the windows are sequential then overfitting will result because all but one of the elements of the last iteration will be the same. 
+                        This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
+                        Thus we randomize the sequence of windows 
+                """
+                batch = self.data.train_data[:, i:i+batch_size]
+                batch_supervision = self.data.train_supervision[:, i:i+batch_size]
+                gradient = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
+                last_loss = self.get_loss(batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss  
+                """   
+                    Now we do a line search inorder to find a productive step size for the gradient descent. 
+                    F(step size) = change in loss from last epoch due to step size 
+                        We want to find the minumum. Where negative change is good. B - A                        
+                        We know that the change in loss for 0 step size is 0.
+                            If we find 2 more points we can create a parabala 
+                            Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
+                            Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
+                            Thus we chose the three points closest to zero
+                            We loop with our exit condition being finding a negative value of F(step size). 
+                        Lastly we step 1.5 times the magnitude of known productive step. 
+                        This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
 
-            """
-            
-            buffered_network = self.layers 
-            d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-            loop_count = 0
-            while (d_loss >= 0 and loop_count < 30): #  While there is no improvement with step length, half the step and check again
-                last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
-                #self.layers[i] = buffered_layer
-                d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-                loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
-                if d_loss == 0:
-                    #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
-                    #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
-                    last_step = .000001
-                    d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-                    raise Exception("Network is Zeroed out from reLU")
-
-            parabala_points_x = [0, last_step,   last_step*1.5] 
-            upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
-            parabala_points_y = [0, d_loss, upstep_delta_loss]
-            parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
-
-            #   Parabalas need three non linear points. X points will always be different
-            if parabala_points_y[1] == parabala_points_y[2]: 
-                best_step_index = 1
-            else:
-                #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
-                parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
-                delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                """
                 
-                #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
-                parabala_points_x.append(parabala_step)
-                parabala_points_y.append(delta_loss_parabala)
-                parabala_points_loss.append(parabala_loss)
-                best_step_index = np.argmin(parabala_points_y)
+                buffered_network = self.layers 
+                d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                loop_count = 0
+                while (d_loss >= 0 and loop_count < 30): #  While there is no improvement with step length, half the step and check again
+                    last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
+                    #self.layers[i] = buffered_layer
+                    d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                    loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
+                    if d_loss == 0:
+                        #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
+                        #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
+                        last_step = .000001
+                        d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                        raise Exception("Network is Zeroed out from reLU")
 
-            if parabala_points_x[best_step_index] == 0: 
-                #   Insure that the step size is never 0
-                break # The network is perfectly fit to training data or there is a error in the logic 
+                parabala_points_x = [0, last_step,   last_step*1.5] 
+                upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
+                parabala_points_y = [0, d_loss, upstep_delta_loss]
+                parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
 
-            #   Finalize Step and prepair for next iteration
-            best_known_step = parabala_points_x[best_step_index] 
-            last_step = best_known_step
-            last_loss = parabala_points_loss[best_step_index]
-            self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
-            #self.layers = buffered_network - parabala_points_x[best_step_index] * gradient
+                #   Parabalas need three non linear points. X points will always be different
+                if parabala_points_y[1] == parabala_points_y[2]: 
+                    best_step_index = 1
+                else:
+                    #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
+                    parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
+                    delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                    
+                    #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
+                    parabala_points_x.append(parabala_step)
+                    parabala_points_y.append(delta_loss_parabala)
+                    parabala_points_loss.append(parabala_loss)
+                    best_step_index = np.argmin(parabala_points_y)
 
-            print("\t Step Size: " + str(last_step) + "\t Loss: " + str(last_loss))
-            if last_loss < 0.01: return
+                if parabala_points_x[best_step_index] == 0: 
+                    #   Insure that the step size is never 0
+                    break # The network is perfectly fit to training data or there is a error in the logic 
+
+                #   Finalize Step and prepair for next iteration
+                best_known_step = parabala_points_x[best_step_index] 
+                last_step = best_known_step
+                last_loss = parabala_points_loss[best_step_index]
+                self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
+                if (i % 100) == 0:
+                    print("\t Step Size: " + str(last_step) + "\t Loss: " + str(last_loss))
+                if last_loss < 0.01: return
     
     def temp_fit(self, epochs, data, supervision):
         step_size = 1
