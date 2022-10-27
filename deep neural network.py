@@ -45,13 +45,13 @@ class DNN:
             return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows)
 
         self.data = data #  Attach data set to DNN. You can switch data set at any time for transfer learning
-        #   Note: The test and train data have the same shapes in the second dimension. 
-        input_layer = initialize_layer(neurons_per_layer[0], data.test_data.shape[1])
+        #   Note: The test and train data have the same shapes in the first dimension. 
+        input_layer = initialize_layer(neurons_per_layer[0], data.test_data.shape[0])
         layers = [input_layer]
         for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
         #   Init the final layer. It conforms its shape entirely and is not programable
-        layers.append(initialize_layer(data.test_supervision.shape[1], neurons_per_layer[-1]))
+        layers.append(initialize_layer(data.test_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
 
     @staticmethod
@@ -81,7 +81,7 @@ class DNN:
         flow = self.layers[-1] @ flow
 
         #   TODO use softmax optionally at end of last layer for classification
-        return flow.reshape(len(flow),1)
+        return flow # flow.reshape(len(flow),1)
 
     def get_loss(self, input, supervision):
         residual = self.feed_forward(input) - supervision
@@ -229,11 +229,13 @@ class MNIST:
             #MNIST.show_image_from_row(data.test_data, 0)
 
             #   Solution as a one hot vector. In MNIST we have 0-9 as labels. We put the position of the output neurons as the value of the label
-            supervision = np.zeros(shape=(len(data), 10, 1))
-            supervision[range(len(data)), data[:,0], :] = 1
+            supervision = np.zeros(shape=(10, len(data))) # Ten Labels X Data set rows 
+            supervision[data[:,0], range(len(data))] = 1
+
+            #   This is the last point you can draw img without reversing z score to pixels
 
             #   Normalize the inpute to keep it close to activation value 0
-            data = normalize_tensor(data[:,1:]) # Remove Label
+            data = normalize_tensor(data[:,1:]).transpose() # Remove Label
 
             return data, supervision
 
@@ -251,15 +253,17 @@ class MNIST:
 #   Do the math on batch processing. 
 #   Code out batching. Move to automation. no parameters for data. just batch size. 
 #   Math will show inter batch order does not matter thus use a window for batching             
+#   Switch back to reg fit from temp
 
 data = MNIST()
 
 neurons_per_layer = [100] # First layers neuron count. Second layer defined implicitly
 dnn = DNN(neurons_per_layer, data=data)
 
-first_image = data.test_data[0][:,np.newaxis]
+first_batch = data.test_data[:, :3]
+dnn.feed_forward(first_batch)
 
-dnn.temp_fit(epochs=10000, data=first_image, supervision=data.test_supervision[0])
+dnn.temp_fit(epochs=10000, data=first_batch, supervision=data.test_supervision[:, :3])
 
 
 i = 2
