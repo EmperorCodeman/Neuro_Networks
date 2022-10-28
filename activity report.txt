@@ -1,0 +1,4 @@
+Activity Report:
+	Changing to parabula and line search became possible after norm weights/input
+	Parabula increased descent speed X750 fold
+	No fundemental change was needed when converting to batching or bias

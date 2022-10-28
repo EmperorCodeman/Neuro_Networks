@@ -83,10 +83,14 @@ class DNN:
         #   TODO use softmax optionally at end of last layer for classification
         return flow # flow.reshape(len(flow),1)
 
-    def get_loss(self, input, supervision):
-        residual = self.feed_forward(input) - supervision
+    def get_loss(self, batch, supervision):
+        residual = self.feed_forward(batch) - supervision
         return np.sum( (residual**2) / 2) 
- 
+        
+    def get_accuracy(self, batch, batch_supervision):
+        batch_size = batch.shape[1]
+        return sum(np.argmax(self.feed_forward(batch), axis=0) == np.argmax(batch_supervision, axis=0)) / batch_size
+
     def get_gradient(self, batch, supervision):
         #   2 layers only supported currently 
         #   TODO NOTE each layer can be optimized on its own thread. no lock needed. the other layers will be updated as they do. residual only updated once per master loop 
@@ -199,7 +203,9 @@ class DNN:
                 print("Layer: " + str(i+1) + "\n\t Step Size: " + str(last_steps[i]) + "\t Loss: " + str(last_losses[i]))
                 if last_losses[i] < 0.01: return
 
-    def fit(self):
+    def fit(self, batch_size=100, epochs_limit=100):
+        #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch but less general
+
         def delta_loss(step_magnitude, last_loss, buffered_network):
             #   Only a temp update of the layer
             self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(gradient)]
@@ -234,9 +240,10 @@ class DNN:
             vertex_x = -B / (2*A)
             return vertex_x
 
-        epochs_limit = 10000
         last_step = 1
-        batch_size = 10 #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch
+        test_sample_size = 300
+        test_batch = self.data.test_data[:, 0:test_sample_size]
+        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
 
         for epoch in range(epochs_limit): 
             print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
@@ -314,9 +321,12 @@ class DNN:
                 last_step = best_known_step
                 last_loss = parabala_points_loss[best_step_index]
                 self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
-                if (i % 100) == 0:
-                    print("\t Step Size: " + str(last_step) + "\t Loss: " + str(last_loss))
-                if last_loss < 0.01: return
+                if (i % 100) == 0:                  
+                    test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
+                    train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
+                    print("\t Step Size: " + str(last_step) + "\t Training Loss: " + str(np.round(last_loss, 2))\
+                        + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+                    if test_accuracy > 0.95: return # trained
     
     def temp_fit(self, epochs, data, supervision):
         step_size = 1
@@ -363,7 +373,8 @@ class MNIST:
 
             return data, supervision
 
-        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+        self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
 
     @staticmethod
     def show_image_from_row(data, row):
@@ -374,20 +385,21 @@ class MNIST:
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
 
-#   descent all layers in one step
-#   Code out batching. Move to automation. no parameters for data. just batch size. 
-#   Math will show inter batch order does not matter thus use a window for batching             
 #   Add bias
 #   Add softmax activation to final layer
 
 data = MNIST()
 
-neurons_per_layer = [100] # First layers neuron count. Second layer defined implicitly
+neurons_per_layer = [800] # First layers neuron count. Second layer defined implicitly
 dnn = DNN(neurons_per_layer, data=data)
 
 #dnn.feed_forward(first_batch)
 
-dnn.fit()
+dnn.fit(batch_size=32, epochs_limit=1)
+dnn.fit(batch_size=100, epochs_limit=2)
+dnn.fit(batch_size=1000, epochs_limit=1)
+
+
 
 
 i = 2
