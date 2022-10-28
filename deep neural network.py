@@ -36,7 +36,7 @@ class DNN:
                 Thus chose any shape architecture and we can infer the gradients
             Neurons/Layer: Parse first layer first, then all hidden layers. 
                 Last layer is defined by data set. so do not parse it in Neurons per layer arg
-
+            Note the first column is the bias. Which is translation of the origin. first row of input is always 1
             We use reLU as the only activation function, always activating between hidden layers 
         """
 
@@ -46,7 +46,7 @@ class DNN:
 
         self.data = data #  Attach data set to DNN. You can switch data set at any time for transfer learning
         #   Note: The test and train data have the same shapes in the first dimension. 
-        input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0])
+        input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0]) #  Plus one is for bias
         layers = [input_layer]
         for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
@@ -244,8 +244,11 @@ class DNN:
         test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
+        
 
+        print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
+            inter_epoch_iteration = 1
             print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
@@ -324,10 +327,11 @@ class DNN:
                 if (i % 100) == 0:                  
                     test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                     train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                    print("\t Step Size: " + str(last_step) + "\t Training Loss: " + str(np.round(last_loss, 2))\
+                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + str(last_step) + "\t Training Loss: " + str(np.round(last_loss, 2))\
                         + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
                     if test_accuracy > 0.95: return # trained
-    
+                inter_epoch_iteration += 1
+
     def temp_fit(self, epochs, data, supervision):
         step_size = 1
         for epoch in range(epochs):
@@ -348,9 +352,11 @@ class MNIST:
         def normalize_tensor(tensor):
             #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
             active_pixels = tensor != 0
+            active_pixels[0,:] = False #    Bias 1 left out
             z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
             tensor = np.zeros_like(tensor, dtype=float)
             tensor[active_pixels] = z_scores_of_pixels
+            tensor[0,:] = 1 # Convert Label to 1. This will always multiply times the bias in the respective nueron
             return tensor
 
         def load_data_from_csv(file_location):
@@ -368,9 +374,10 @@ class MNIST:
 
             #   This is the last point you can draw img without reversing z score to pixels
 
-            #   Normalize the inpute to keep it close to activation value 0
-            data = normalize_tensor(data[:,1:]).transpose() # Remove Label
-
+            #   A instance is a column as input in matrix multiplication
+            data = data.transpose() 
+            data = normalize_tensor(data) # This will prep the bias 1 as well 
+            
             return data, supervision
 
         self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
@@ -385,18 +392,19 @@ class MNIST:
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
 
+#   Examine weights
 #   Add bias
 #   Add softmax activation to final layer
 
 data = MNIST()
 
-neurons_per_layer = [800] # First layers neuron count. Second layer defined implicitly
+neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
 dnn = DNN(neurons_per_layer, data=data)
 
 #dnn.feed_forward(first_batch)
 
 dnn.fit(batch_size=32, epochs_limit=1)
-dnn.fit(batch_size=100, epochs_limit=2)
+dnn.fit(batch_size=100, epochs_limit=1)
 dnn.fit(batch_size=1000, epochs_limit=1)
 
 
