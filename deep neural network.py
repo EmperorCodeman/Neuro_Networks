@@ -24,6 +24,9 @@ from PIL import Image
 
     maybe I am seeing decreased disparity between training and testing accuracy as dataset sizes increase
 
+    I audited this. Average loss does indeed decrease with smaller batch size. However this has no value in terms of testing accuracy. 
+        The residual gets way smaller with smaller batch size. I think this is because the gradient is more focused on less columns. 
+            Printing loss before step doesnt explain this. I dont know why the loss gets smaller with batch size.  
     
 
     TODO Use induction to differentiate any dnn
@@ -46,10 +49,21 @@ class ACTIVATIONS:
 
     @staticmethod
     def softmax(dendritic_input):
-        return dendritic_input
-
+        e_to_x = np.exp(dendritic_input)
+        return e_to_x / np.sum(e_to_x, axis=1)
+        
     @staticmethod
     def softmax_primed(dendritic_input):
+        #   l-1 prime used inductively. thus last layers activation primed unneeded
+        raise Exception("Back propagation induction allows us to skip the first activations prime")
+        #   Using quotient rule we arive at this. Neglecting jacobian concept
+        e_to_x = np.exp(dendritic_input)
+        column_sum = np.sum(e_to_x, axis=1)
+        coeff = e_to_x / column_sum**2
+        return coeff*(column_sum - e_to_x)
+        
+    @staticmethod
+    def none(dendritic_input):
         return dendritic_input
 
 class LOSS_FUNCTIONS:
@@ -63,6 +77,21 @@ class LOSS_FUNCTIONS:
     @staticmethod
     def mean_squared_error_primed(dnn, batch, supervision):
         return (2/batch.shape[1]) * dnn.feed_forward(batch) - supervision
+
+    @staticmethod
+    def cross_entropy(dnn, batch, supervision):
+        #   Cross entropy requires inputs as probabilities. No negatives allowed
+        #   Google cross entropy for its theory
+        supervision = supervision == 1
+        return np.sum(-np.log(dnn.feed_forward(batch)[supervision])) / supervision.shape[1]
+
+    @staticmethod
+    def cross_entropy_primed(dnn, batch, supervision):
+        #   When I did the gradient I got the below. 
+        #coeff = -supervision * supervision.shape[1]
+        #return coeff / dnn.feed_forward(batch) 
+        #   Universal Proved gradient
+        pass
 
 class DNN:
     def __init__(self, neurons_per_layer, data,\
@@ -91,11 +120,14 @@ class DNN:
         #   Initialize all layers weights as np objects with the shapes as given from neurons per layer
         input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0]) #  Plus one is for bias
         layers = [input_layer]
-        for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers
+        for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers 
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
         #   Init the final layer. It conforms its shape entirely and is not programable
         layers.append(initialize_layer(data.train_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
+
+        #   Data storage for layers outputs
+        self.flows = [None] * len(layers)
 
         #   Tie activation functions and their derivities to dnn
         self.hidden_activation, self.hidden_activation_primed = hidden_layers_activation_and_prime
@@ -104,21 +136,43 @@ class DNN:
         #   Tie Loss 
         self.get_loss, self.loss_primed = loss_function_and_prime 
 
-    def feed_forward(self, input):
-        #   Move through the network 
+    def feed_forward(self, input, forward_propagating=False):
+        #   Parse independent vars, ie observation into the networks first layer and process activation func if network has hidden layers 
+        if forward_propagating:
+            #   Save each output per layer for backpropagating. optimization 
+            if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.  
+                self.flows[0] = self.layers[0] @ input #    Backpropagation uses the weighted input unactivated
+                flow = self.hidden_activation( self.flows[0] )
+            else:
+                self.flows[0] = self.layers[0] @ input
+                flow = self.final_activation(self.flows[0])
+                return flow    
 
-        #   Parse independent vars, ie observation into the networks first layer and process activation func if network is has hidden layers 
-        if len(self.layers) > 1:
-            flow = self.hidden_activation( self.layers[0] @ input )
-        
-        #   Flow and use activation function for all hiden layers
-        for layer in self.layers[1:-1]:
-            flow = self.hidden_activation( layer @ flow )
-        
-        #   Forgo activation function on the last function 
-        flow = self.final_activation(self.layers[-1] @ flow)
+            #   Flow and use activation function for all hiden layers
+            for i, layer in enumerate(self.layers[1:-1]):
+                self.flows[i+1] = layer @ flow
+                flow = self.hidden_activation( self.flows[i+1] )
+                
+            #   All activations can be different, we only change the final activation for simplicity 
+            self.flows[-1] = self.layers[-1] @ flow
+            flow = self.final_activation( self.flows[-1] )
+ 
+        else: # I split this for optimization. Only check the condition once. Dont rewrite flows uneeded  
 
-        return flow # flow.reshape(len(flow),1)
+            if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.
+                flow = self.hidden_activation( self.layers[0] @ input )
+            else:
+                flow = self.final_activation(self.layers[0] @ input)
+                return flow 
+
+            #   Flow and use activation function for all hiden layers
+            for layer in self.layers[1:-1]:
+                flow = self.hidden_activation( layer @ flow )
+                
+            #   Forgo activation function on the last function 
+            flow = self.final_activation(self.layers[-1] @ flow)
+    
+        return flow # flow.reshape(len(flow),1) if batch size 1 reshape needed
         
     def get_accuracy(self, batch, batch_supervision):
         #   Only for classification. Take Pass batches from the testing data partition
@@ -126,12 +180,23 @@ class DNN:
         return sum(np.argmax(self.feed_forward(batch), axis=0) == np.argmax(batch_supervision, axis=0)) / batch_size
 
     def get_gradient(self, batch, supervision):
+        #   Old method
+        #gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+        #gradient_layer_2 = loss_primed @ self.hidden_activation(layer_1_output.transpose())
+
         #   2 layers only supported currently 
         #   TODO NOTE each layer can be optimized on its own thread. no lock needed. the other layers will be updated as they do. residual only updated once per master loop 
         loss_primed = self.loss_primed(self, batch, supervision) 
-        layer_1_output = self.layers[0] @ batch
+        
+        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        layer_1_output = self.flows[0]   #self.layers[0] @ batch
+
         gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        gradient_layer_2 = loss_primed @ self.hidden_activation(layer_1_output.transpose()) 
+        gradient_layer_2 = loss_primed @ self.hidden_activation(layer_1_output.transpose())
+
+
+        #gradient_layer_1 = 4
+        #gradient_layer_2 = 0
         return [gradient_layer_1, gradient_layer_2]
 
     def fit(self, batch_size=100, epochs_limit=100):
@@ -271,8 +336,9 @@ class DNN:
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
                     test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                     train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + str(last_step) + "\t Training Loss: " + str(np.round(last_loss, 2))\
+                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{last_step:.2E}' + "\t Training Loss: " + str(np.round(last_loss, 2))\
                         + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+                        
                     if test_accuracy > 0.95: return # trained
                 inter_epoch_iteration += 1
 
@@ -296,18 +362,18 @@ class MNIST:
         def normalize_tensor(tensor):
             #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
             active_pixels = tensor != 0
-            active_pixels[0,:] = False #    Bias 1 left out
+            #active_pixels[0,:] = False #    Bias 1 left out
             z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
-            tensor = np.zeros_like(tensor, dtype=float)
+            tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
             tensor[active_pixels] = z_scores_of_pixels
-            tensor[0,:] = 1 # Convert Label to 1. This will always multiply times the bias in the respective nueron
+            # tensor[0,:] = 1 # Convert Label to 1. This will always multiply times the bias in the respective nueron
             return tensor
 
         def load_data_from_csv(file_location):
             """
                 CSV Format: row at image. row 1 as header. Column one as solution lable. 
             """
-
+            #   
             data = np.genfromtxt(file_location, delimiter=',', dtype=np.uint8)[1:] #    First Row is Gumbo     
             #   Pause here and call images if you want. Before normalization
             #MNIST.show_image_from_row(data.test_data, 0)
@@ -318,14 +384,14 @@ class MNIST:
 
             #   This is the last point you can draw img without reversing z score to pixels
 
-            #   A instance is a column as input in matrix multiplication
-            data = data.transpose() 
-            data = normalize_tensor(data) # This will prep the bias 1 as well 
+            #   A instance is a column as input in matrix multiplication thus the transpose. Remove the label column
+            data = data[:,1:].transpose() 
+            data = normalize_tensor(data) # This will convert to z scores from data 
             
             return data, supervision
 
-        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
-        # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+        #self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+        #self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
         self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
         self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
         self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
@@ -342,21 +408,16 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-dnn = DNN(neurons_per_layer, data=data)
+dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none])
 
-#dnn.feed_forward(first_batch)
-
-dnn.fit(batch_size=32, epochs_limit=5)
+dnn.fit(batch_size=10, epochs_limit=5)
 dnn.fit(batch_size=100, epochs_limit=3)
 dnn.fit(batch_size=1000, epochs_limit=5)
 
-#   Add softmax activation to final layer and cross entropy as loss function
-    # start by doing the gradiant of the new function
-        # code feed forward and new function. 
-        # add gradiant
-    # add activation class, and pass the activation function and its derivitive to the dnn. 
-#   bias's were added wrong. the way you did it only works for the first layer. You need to include bias in the math
+ 
+#   bias's were added wrong. remove the old way and add them correctly. 
 
+#   Optimaization. Save feed forward to memory in dnn and access it so no need to recall it in loss 
 
 i = 2
 
