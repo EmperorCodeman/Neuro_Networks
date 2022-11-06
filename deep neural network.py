@@ -229,19 +229,17 @@ class DNN:
         gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
         gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
 
-        #   2 layers only supported currently 
-        #   TODO NOTE each layer can be optimized on its own thread. no lock needed. the other layers will be updated as they do. residual only updated once per master loop 
-        
-        #self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        #loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
-        
+         
+        # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        # loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
         # loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
+        
         # gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() )
         # gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
         
         return [gradient_layer_1, gradient_layer_2]
 
-    def fit(self, batch_size=100, epochs_limit=100):
+    def parabalic_fit(self, batch_size=12, epochs_limit=3):
         #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch but less general
 
         def delta_loss(step_magnitude, last_loss, buffered_network):
@@ -381,23 +379,54 @@ class DNN:
                     print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{last_step:.2E}' + "\t Training Loss: " + str(np.round(last_loss, 2))\
                         + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
                         
-                    if test_accuracy > 0.95: return # trained
+                    if test_accuracy > 0.99: return # trained
                 inter_epoch_iteration += 1
 
-    def temp_fit(self, epochs, data, supervision):
+    def normal_fit(self, batch_size=12, epochs_limit=3):
         step_size = 1
-        for epoch in range(epochs):
-            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------")
-            gradients = self.get_gradient(data, supervision)
-            for i, layers_gradient in enumerate(gradients):
-                gradients_magnitude = np.sum(layers_gradient**2)**.5
-                if gradients_magnitude == 0: continue
-                layers_gradient = layers_gradient / gradients_magnitude #   Normalize
-                self.layers[i] -= step_size * layers_gradient
-                loss = self.get_loss(data, supervision)
-                print("Layer: " + str(i+1) + "\n\tLoss: " + str(loss))
-                if loss < 0.01: return 
+        test_sample_size = 300
+        test_batch = self.data.test_data[:, 0:test_sample_size]
+        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
+        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
+
+        for epoch in range(epochs_limit): 
+            inter_epoch_iteration = 1
+            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
+            for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
+                """
+                    i = batch iteration
+                    Iterate over the entire training data_set every epoch. 
+                    The batch size creates the size of the window. From there we increment each the window till the end of the set
+                    We optimize the weights every iteration, and we optimize the step size every iteration
+                    Use of np.random is explained below
+                    We randomize the sequence of iteration. I thought of this personally by this thinking:
+                        If the windows are sequential then overfitting will result because all but one of the elements of the last iteration will be the same. 
+                        This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
+                        Thus we randomize the sequence of windows 
+                """
+                batch = self.data.train_data[:, i:i+batch_size]
+                batch_supervision = self.data.train_supervision[:, i:i+batch_size]
+                gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
+               
+                #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
                 
+                for ii, layers_gradient in enumerate(gradients):
+                    gradients_magnitude = np.sum(layers_gradient**2)**.5
+                    if gradients_magnitude == 0: continue
+                    layers_gradient = layers_gradient / gradients_magnitude #   Normalize
+                    self.layers[ii] -= step_size * layers_gradient
+                
+                if (i % probability_of_printing_readout_per_iter) == 0:                  
+                    loss = self.get_loss(self, batch, batch_supervision)
+                    test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
+                    train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
+                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
+                        + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+                    if test_accuracy > 0.99: return # trained
+                inter_epoch_iteration += 1               
+               
+
+
 class MNIST:
     def __init__(self) -> None:
 
@@ -451,9 +480,7 @@ neurons_per_layer = [1000] # First layers neuron count. Second layer defined imp
 dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 #dnn = DNN(neurons_per_layer, data=data)
 
-dnn.fit(batch_size=11, epochs_limit=5)
-dnn.fit(batch_size=100, epochs_limit=3)
-dnn.fit(batch_size=1000, epochs_limit=5)
+dnn.normal_fit(batch_size=11, epochs_limit=5)
 
  
 #   Optimaization. Save feed forward to memory in dnn and access it so no need to recall it in loss 
