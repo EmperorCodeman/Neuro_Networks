@@ -33,7 +33,17 @@ from PIL import Image
         Bias increases a networks tolerance of mislabeled data in training
             I think this is because the nested origin is resolvable due to large sample size. 
             By having a nested origin we are deviating from the correct origin. Making default error less
-        Adding bias without any bias gradient had no effect 
+        Adding bias without any bias gradient had minor negative effect
+        I think:
+            Biases help because they move the y intercept to the average weight of without biases   
+            From here the weights ie slope, can tune the output. y = mx + b.
+                Meaning the variance of the weights decreases with a bias offset
+                Thus the range of the weights decreases, and greater generalization is found
+            Note any y can be found from any none zero input with a given weight. However, deviating from a y offset decreases the range of the slopes to achieve the desired y's
+        Note also:
+            Biases control the sensitiviy of the activation:
+                Meaning with a large negative bias we are making a neuron need larger input before it activates
+                    This means. Biases give neurons specialization of labor. Asymetric activation thresholds
 
     Neuro nets profit from outliers, unlike stats. We the brain learn better from outliers and so do they  
 
@@ -57,14 +67,24 @@ class ACTIVATIONS:
 
     @staticmethod
     def softmax(dendritic_input):
+        
+        def normalize_tensor(tensor):
+            #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
+            z_scores_of_pixels = (tensor - np.average(tensor)) / np.std(tensor)
+            tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
+            tensor = z_scores_of_pixels
+            return tensor / tensor.shape[0]
+
+        dendritic_input = normalize_tensor(dendritic_input)
+        #   The first pass should have the output be around 1/lables for all probablities. Because nothing is known this is expectation. Its a stable numerical start
         e_to_x = np.exp(dendritic_input)
-        return e_to_x / np.sum(e_to_x, axis=1)
+        return e_to_x / np.sum(e_to_x, axis=0)
         
     @staticmethod
     def softmax_primed(dendritic_input):
-        #   l-1 prime used inductively. thus last layers activation primed unneeded
+        #   l-1 activation prime used inductively. thus last layers activation primed unneeded
         raise Exception("Back propagation induction allows us to skip the first activations prime")
-        #   Using quotient rule we arive at this. Neglecting jacobian concept
+        #   This is a jacobian
         e_to_x = np.exp(dendritic_input)
         column_sum = np.sum(e_to_x, axis=1)
         coeff = e_to_x / column_sum**2
@@ -91,19 +111,22 @@ class LOSS_FUNCTIONS:
         #   Cross entropy requires inputs as probabilities. No negatives allowed
         #   Google cross entropy for its theory
         supervision = supervision == 1
-        return np.sum(-np.log(dnn.feed_forward(batch)[supervision])) / supervision.shape[1]
+        return np.sum(-np.log(dnn.feed_forward(batch)[supervision])) #/ supervision.shape[1]
 
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
         #   When I did the gradient I got the below. 
         #coeff = -supervision * supervision.shape[1]
         #return coeff / dnn.feed_forward(batch) 
+       
         #   Universal Proved gradient
-        pass
+        #   TODO add batch size as denominator
+        #   This is partial of loss in terms of final z. Final z not final s. s is activated
+        return dnn.feed_forward(batch) - supervision
 
 class DNN:
     def __init__(self, neurons_per_layer, data,\
-            loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed],\
+            loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed],\
             hidden_layers_activation_and_prime=[ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed],\
             final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]):
         """
@@ -119,13 +142,15 @@ class DNN:
         """
 
         def initialize_layer(neurons_count, last_layers_rows):
-            #   Initialize weights as from uniform distribution between -1, and 1
-            return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows)
+            #   Initialize weights as from uniform distribution between -1, and 1. Then we divide by neural count so that the layers output does not get larger with more neurons
+            return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows) / neurons_count
 
         def initialize_biases(layers):
             biases = []
             for layer in layers:
-                biases.append( np.random.uniform(-1, 1, layer.shape[0]).reshape(layer.shape[0], 1) )
+                #   We divide by the layers neurons so that biases do not increase the magnitiude of the flow as it moves layer to layer
+                #   However note that gradient desent will optimize from here with possibly unstable numerical magnitudes 
+                biases.append( np.random.uniform(-1, 1, layer.shape[0]).reshape(layer.shape[0], 1)  / layer.shape[0] )
             biases = np.zeros_like(biases) #    Remove biases
             return biases
 
@@ -198,23 +223,22 @@ class DNN:
         return sum(np.argmax(self.feed_forward(batch), axis=0) == np.argmax(batch_supervision, axis=0)) / batch_size
 
     def get_gradient(self, batch, supervision):
-        #   Old method
-        #gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        #gradient_layer_2 = loss_primed @ self.hidden_activation(layer_1_output.transpose())
+        #   Mean squared error method
+        loss_primed = self.loss_primed(self, batch, supervision) 
+        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+        gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
 
         #   2 layers only supported currently 
         #   TODO NOTE each layer can be optimized on its own thread. no lock needed. the other layers will be updated as they do. residual only updated once per master loop 
-        loss_primed = self.loss_primed(self, batch, supervision) 
         
-        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        layer_1_output = self.flows[0]   #self.layers[0] @ batch
-
-        gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        gradient_layer_2 = loss_primed @ self.hidden_activation(layer_1_output.transpose())
-
-
-        #gradient_layer_1 = 4
-        #gradient_layer_2 = 0
+        #self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        #loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
+        
+        # loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
+        # gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() )
+        # gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
+        
         return [gradient_layer_1, gradient_layer_2]
 
     def fit(self, batch_size=100, epochs_limit=100):
@@ -259,7 +283,7 @@ class DNN:
         test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        probability_of_printing_readout_per_iter = 100
+        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
 
         print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
@@ -280,7 +304,7 @@ class DNN:
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
                 gradient = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
-                last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss  
+                last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
                 """   
                     Now we do a line search inorder to find a productive step size for the gradient descent. 
                     F(step size) = change in loss from last epoch due to step size 
@@ -380,12 +404,10 @@ class MNIST:
         def normalize_tensor(tensor):
             #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
             active_pixels = tensor != 0
-            #active_pixels[0,:] = False #    Bias 1 left out
             z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
             tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
             tensor[active_pixels] = z_scores_of_pixels
-            # tensor[0,:] = 1 # Convert Label to 1. This will always multiply times the bias in the respective nueron
-            return tensor
+            return tensor / tensor.shape[0]
 
         def load_data_from_csv(file_location):
             """
@@ -426,15 +448,14 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none])
+dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
+#dnn = DNN(neurons_per_layer, data=data)
 
-dnn.fit(batch_size=10, epochs_limit=5)
+dnn.fit(batch_size=11, epochs_limit=5)
 dnn.fit(batch_size=100, epochs_limit=3)
 dnn.fit(batch_size=1000, epochs_limit=5)
 
  
-#   bias's were added wrong. remove the old way and add them correctly. 
-
 #   Optimaization. Save feed forward to memory in dnn and access it so no need to recall it in loss 
 
 i = 2
