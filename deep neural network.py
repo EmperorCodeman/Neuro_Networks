@@ -28,6 +28,14 @@ from PIL import Image
         The residual gets way smaller with smaller batch size. I think this is because the gradient is more focused on less columns. 
             Printing loss before step doesnt explain this. I dont know why the loss gets smaller with batch size.  
     
+    Bias theory:
+        Bias is a translation of the origin in respective feature space
+        Bias increases a networks tolerance of mislabeled data in training
+            I think this is because the nested origin is resolvable due to large sample size. 
+            By having a nested origin we are deviating from the correct origin. Making default error less
+        Adding bias without any bias gradient had no effect 
+
+    Neuro nets profit from outliers, unlike stats. We the brain learn better from outliers and so do they  
 
     TODO Use induction to differentiate any dnn
     Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize 
@@ -114,6 +122,13 @@ class DNN:
             #   Initialize weights as from uniform distribution between -1, and 1
             return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows)
 
+        def initialize_biases(layers):
+            biases = []
+            for layer in layers:
+                biases.append( np.random.uniform(-1, 1, layer.shape[0]).reshape(layer.shape[0], 1) )
+            biases = np.zeros_like(biases) #    Remove biases
+            return biases
+
          #  Attach data set to DNN. You can switch data set at any time for transfer learning
         self.data = data
 
@@ -129,6 +144,9 @@ class DNN:
         #   Data storage for layers outputs
         self.flows = [None] * len(layers)
 
+        #   create biases
+        self.biases = initialize_biases(layers)
+
         #   Tie activation functions and their derivities to dnn
         self.hidden_activation, self.hidden_activation_primed = hidden_layers_activation_and_prime
         self.final_activation, self.final_activation_primed = final_activation_and_prime
@@ -141,36 +159,36 @@ class DNN:
         if forward_propagating:
             #   Save each output per layer for backpropagating. optimization 
             if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.  
-                self.flows[0] = self.layers[0] @ input #    Backpropagation uses the weighted input unactivated
+                self.flows[0] = self.layers[0] @ input + self.biases[0] #    Backpropagation uses the weighted input unactivated
                 flow = self.hidden_activation( self.flows[0] )
             else:
-                self.flows[0] = self.layers[0] @ input
-                flow = self.final_activation(self.flows[0])
+                self.flows[0] = self.layers[0] @ input + self.biases[0]
+                flow = self.final_activation(  self.flows[0] ) 
                 return flow    
 
             #   Flow and use activation function for all hiden layers
             for i, layer in enumerate(self.layers[1:-1]):
-                self.flows[i+1] = layer @ flow
+                self.flows[i+1] = layer @ flow + self.biases[i] 
                 flow = self.hidden_activation( self.flows[i+1] )
                 
             #   All activations can be different, we only change the final activation for simplicity 
-            self.flows[-1] = self.layers[-1] @ flow
+            self.flows[-1] = self.layers[-1] @ flow  + self.biases[-1] 
             flow = self.final_activation( self.flows[-1] )
  
         else: # I split this for optimization. Only check the condition once. Dont rewrite flows uneeded  
 
             if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.
-                flow = self.hidden_activation( self.layers[0] @ input )
+                flow = self.hidden_activation( self.layers[0] @ input + self.biases[0] )
             else:
-                flow = self.final_activation(self.layers[0] @ input)
+                flow = self.final_activation(self.layers[0] @ input + self.biases[0] )
                 return flow 
 
             #   Flow and use activation function for all hiden layers
-            for layer in self.layers[1:-1]:
-                flow = self.hidden_activation( layer @ flow )
+            for i, layer in enumerate(self.layers[1:-1]):
+                flow = self.hidden_activation( layer @ flow  + self.biases[i] )
                 
             #   Forgo activation function on the last function 
-            flow = self.final_activation(self.layers[-1] @ flow)
+            flow = self.final_activation(self.layers[-1] @ flow + self.biases[-1] )
     
         return flow # flow.reshape(len(flow),1) if batch size 1 reshape needed
         
