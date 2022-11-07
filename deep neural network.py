@@ -95,7 +95,9 @@ class ACTIVATIONS:
         return dendritic_input
 
 class LOSS_FUNCTIONS:
-    
+    accuracy_importance, normality_importance = .7, .3
+    regulizer_exponential = 12 # Must be even so no negatives
+
     @staticmethod
     def mean_squared_error(dnn, batch, supervision):
         #   The expectation is the oupute of the net
@@ -111,7 +113,9 @@ class LOSS_FUNCTIONS:
         #   Cross entropy requires inputs as probabilities. No negatives allowed
         #   Google cross entropy for its theory
         supervision = supervision == 1
-        return np.sum(-np.log(dnn.feed_forward(batch)[supervision])) #/ supervision.shape[1]
+        accuracy_loss = LOSS_FUNCTIONS.accuracy_importance * np.sum(-np.log(dnn.feed_forward(batch)[supervision])) / supervision.shape[1]
+        normality_loss = LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn)
+        return accuracy_loss + normality_loss
 
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
@@ -119,10 +123,24 @@ class LOSS_FUNCTIONS:
         #coeff = -supervision * supervision.shape[1]
         #return coeff / dnn.feed_forward(batch) 
        
+        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation
+        #   The gradient of the weights use the regularizer primed. See backpropagation theory for understanding
         #   Universal Proved gradient
-        #   TODO add batch size as denominator
         #   This is partial of loss in terms of final z. Final z not final s. s is activated
-        return dnn.feed_forward(batch) - supervision
+        return LOSS_FUNCTIONS.accuracy_importance*(dnn.feed_forward(batch) - supervision) / supervision.shape[1] 
+
+    @staticmethod
+    def regularize_weights(dnn):
+        #   Punish large weights or e^x will reach infinity. Average weight squared as punishment 
+        punishment = 0
+        for layer in dnn.layers:
+            punishment += np.sum(layer**LOSS_FUNCTIONS.regulizer_exponential)
+        return punishment / dnn.network_size
+
+    @staticmethod
+    def regularize_weights_primed(dnn):
+        #   This is the rate of change of the regulizer term in terms of the weights. Not final z. Seperate from backprogation 
+        return [ (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size) * (layer**(LOSS_FUNCTIONS.regulizer_exponential-1)) for layer in dnn.layers ]
 
 class DNN:
     def __init__(self, neurons_per_layer, data,\
@@ -168,6 +186,9 @@ class DNN:
 
         #   Data storage for layers outputs
         self.flows = [None] * len(layers)
+
+        #   Store number of weights of network
+        self.network_size = np.sum([layer.size for layer in layers])
 
         #   create biases
         self.biases = initialize_biases(layers)
@@ -234,9 +255,14 @@ class DNN:
         loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
         loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
         
-        gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() )
+        #   Partial loss from accuracy in terms of specific layers weights
+        gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() ) 
         gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
-        
+        #   Add the Partial loss from regularization terms
+        regulaizer_gradients = LOSS_FUNCTIONS.regularize_weights_primed(dnn)
+        gradient_layer_1 += regulaizer_gradients[0]
+        gradient_layer_2 += regulaizer_gradients[1]
+
         return [gradient_layer_1, gradient_layer_2]
 
     def parabalic_fit(self, batch_size=12, epochs_limit=3):
@@ -281,7 +307,7 @@ class DNN:
         test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        probability_of_printing_readout_per_iter = 1 # 1 in 100 chance of print out
+        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
 
         print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
@@ -356,6 +382,7 @@ class DNN:
                 else:
                     #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
                     parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
+                    #if parabala_step <= 1.5 and parabala_step > 0: #    Parabala vertex can be outside safe step size  
                     delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
                     
                     #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
@@ -477,16 +504,26 @@ neurons_per_layer = [1000] # First layers neuron count. Second layer defined imp
 #dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 dnn = DNN(neurons_per_layer, data=data)
 
-dnn.normal_fit(batch_size=11, epochs_limit=1)
+#dnn.normal_fit(batch_size=11, epochs_limit=5)
 dnn.parabalic_fit(batch_size=11, epochs_limit=5)
 
  
-#   Optimaization. Save feed forward to memory in dnn and access it so no need to recall it in loss 
 
-i = 2
+#   Add term to loss for weights mag.  squar root of average squared weight * importance this as a constant 
+#   Add bias and gradient  
+
+
+
+
+
+
+
+
 
 
 """
+    Optimization. Use memory in dnn and access it so no need to recall. self.flows not used enough 
+
     Mini lecture:
         Explain bias and how his solution created no need to change anything with bias
             bias as a translation of the origin in feature space of layer
