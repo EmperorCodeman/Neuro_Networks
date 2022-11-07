@@ -308,6 +308,7 @@ class DNN:
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
+        step_bounds = (0, 5) #    Do not step negatively below lower, or over above upper. If parabula vertex interpolates outside bounds then revert to known loss inside bounds  
 
         print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
@@ -328,7 +329,12 @@ class DNN:
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
                 gradient = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
+                for ii, layers_gradient in enumerate(gradient): # Norm gradient controls step bounds better
+                    gradients_magnitude = np.sum(layers_gradient**2)**.5
+                    if gradients_magnitude == 0: continue
+                    gradient[ii] = layers_gradient / gradients_magnitude #   Normalize
                 last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
+                if last_step > 1: last_step = 1 #   Large delta loss due to large step size over fits the net to current batch/iteration. This causes the descent to aimlessly osculate overreacting 
                 """   
                     Now we do a line search inorder to find a productive step size for the gradient descent. 
                     F(step size) = change in loss from last epoch due to step size 
@@ -382,13 +388,13 @@ class DNN:
                 else:
                     #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
                     parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
-                    #if parabala_step <= 1.5 and parabala_step > 0: #    Parabala vertex can be outside safe step size  
-                    delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
-                    
-                    #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
-                    parabala_points_x.append(parabala_step)
-                    parabala_points_y.append(delta_loss_parabala)
-                    parabala_points_loss.append(parabala_loss)
+                    if parabala_step > step_bounds[0] and parabala_step <= step_bounds[1]: #    Parabala vertex can be outside safe step size. If so dont add  
+                        delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                        
+                        #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
+                        parabala_points_x.append(parabala_step)
+                        parabala_points_y.append(delta_loss_parabala)
+                        parabala_points_loss.append(parabala_loss)
                     best_step_index = np.argmin(parabala_points_y)
 
                 if parabala_points_x[best_step_index] == 0: 
