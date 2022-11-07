@@ -68,18 +68,18 @@ class ACTIVATIONS:
     @staticmethod
     def softmax(dendritic_input):
         
-        def normalize_tensor(tensor):
-            #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
-            z_scores_of_pixels = (tensor - np.average(tensor)) / np.std(tensor)
-            tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
-            tensor = z_scores_of_pixels
-            return tensor / tensor.shape[0]
+        # def normalize_tensor(tensor):
+        #     #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
+        #     return (tensor - np.average(tensor)) / np.std(tensor) / tensor.shape[0]
 
-        dendritic_input = normalize_tensor(dendritic_input)
+        # dendritic_input = normalize_tensor(dendritic_input)
+
         #   The first pass should have the output be around 1/lables for all probablities. Because nothing is known this is expectation. Its a stable numerical start
+        #   This is achieved if you init weights[-1,1] / by respective layers number of neurons
         e_to_x = np.exp(dendritic_input)
-        return e_to_x / np.sum(e_to_x, axis=0)
-        
+        e_to_x = e_to_x / np.sum(e_to_x, axis=0)
+        return e_to_x # todo move return up so no rewrite to e to x in memory optimizationS
+
     @staticmethod
     def softmax_primed(dendritic_input):
         #   l-1 activation prime used inductively. thus last layers activation primed unneeded
@@ -224,18 +224,18 @@ class DNN:
 
     def get_gradient(self, batch, supervision):
         #   Mean squared error method
-        loss_primed = self.loss_primed(self, batch, supervision) 
-        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
-
-         
+        # loss_primed = self.loss_primed(self, batch, supervision) 
         # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        # loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
-        # loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
+        # gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+        # gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
+         
+        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
-        # gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() )
-        # gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
+        loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
+        loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
+        
+        gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() )
+        gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
         
         return [gradient_layer_1, gradient_layer_2]
 
@@ -281,7 +281,7 @@ class DNN:
         test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
+        probability_of_printing_readout_per_iter = 1 # 1 in 100 chance of print out
 
         print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
@@ -323,7 +323,6 @@ class DNN:
                 loop_count = 0
                 while (d_loss >= 0): #  While there is no improvement with step length, half the step and check again
                     last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
-                    #self.layers[i] = buffered_layer
                     d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
                     loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
                     if loop_count == 30:
@@ -384,10 +383,11 @@ class DNN:
 
     def normal_fit(self, batch_size=12, epochs_limit=3):
         step_size = 1
-        test_sample_size = 300
+        test_sample_size = 500
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
+        print("\n\n\t\t\t\t\t Normal Fit")
 
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 1
@@ -407,8 +407,6 @@ class DNN:
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
                 gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
-               
-                #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
                 
                 for ii, layers_gradient in enumerate(gradients):
                     gradients_magnitude = np.sum(layers_gradient**2)**.5
@@ -425,7 +423,6 @@ class DNN:
                     if test_accuracy > 0.99: return # trained
                 inter_epoch_iteration += 1               
                
-
 
 class MNIST:
     def __init__(self) -> None:
@@ -477,10 +474,11 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
-#dnn = DNN(neurons_per_layer, data=data)
+#dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
+dnn = DNN(neurons_per_layer, data=data)
 
-dnn.normal_fit(batch_size=11, epochs_limit=5)
+dnn.normal_fit(batch_size=11, epochs_limit=1)
+dnn.parabalic_fit(batch_size=11, epochs_limit=5)
 
  
 #   Optimaization. Save feed forward to memory in dnn and access it so no need to recall it in loss 
