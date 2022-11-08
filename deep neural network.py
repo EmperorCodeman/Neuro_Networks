@@ -279,7 +279,7 @@ class DNN:
         
         #   Add the Partial loss from regularization terms
         regulaizer_gradients = LOSS_FUNCTIONS.regularize_weights_primed(dnn)
-        gradient_layer_1 += regulaizer_gradients[0]
+        gradient_layer_1 += regulaizer_gradients[0] #   Do not weight this sum. This is the proven gradient. Weight the importance of regulization in LOSS functions static var for that
         gradient_layer_2 += regulaizer_gradients[1]
 
         layers_gradients = [gradient_layer_1, gradient_layer_2]
@@ -288,12 +288,11 @@ class DNN:
             
         return layers_gradients, bias_gradients
 
-    def parabalic_fit(self, batch_size=12, epochs_limit=3):
-        #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch but less general
+    def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
 
         def delta_loss(step_magnitude, last_loss, buffered_network):
             #   Only a temp update of the layer
-            self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(gradient)]
+            self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
             perspective_loss = self.get_loss(self, batch, batch_supervision)
             delta_loss = perspective_loss - last_loss #  Note: The loss is always positive. Thus delta loss is [0,original_loss]
             return delta_loss, perspective_loss
@@ -326,128 +325,106 @@ class DNN:
             vertex_x = -B / (2*A)
             return vertex_x
 
-        last_step = .5
-        test_sample_size = 300
-        test_batch = self.data.test_data[:, 0:test_sample_size]
-        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
-        step_bounds = (0, 2) #    Do not step negatively below lower, or over above upper. If parabula vertex interpolates outside bounds then revert to known loss inside bounds  
-        print("\n\n\n\t\t\t\t\t\t Parabalic Fit")
-        print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
-        for epoch in range(epochs_limit): 
-            inter_epoch_iteration = 1
-            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
-            for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
-                """
-                    i = batch iteration
-                    Iterate over the entire training data_set every epoch. 
-                    The batch size creates the size of the window. From there we increment each the window till the end of the set
-                    We optimize the weights every iteration, and we optimize the step size every iteration
-                    Use of np.random is explained below
-                    Lastly we randomize the sequence of iteration. I thought of this personally by this thinking:
-                        If the windows are sequential then overfitting will result because all but one of the elements of the last iteration will be the same. 
-                        This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
-                        Thus we randomize the sequence of windows 
-                """
-                batch = self.data.train_data[:, i:i+batch_size]
-                batch_supervision = self.data.train_supervision[:, i:i+batch_size]
-                gradient = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
-                for ii, layers_gradient in enumerate(gradient): # Norm gradient controls step bounds better
-                    gradients_magnitude = np.sum(layers_gradient**2)**.5
-                    if gradients_magnitude == 0: continue
-                    gradient[ii] = layers_gradient / gradients_magnitude #   Normalize
-                last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
-                if last_step > step_bounds[1]: last_step = .5 #   Large delta loss due to large step size over fits the net to current batch/iteration. This causes the descent to aimlessly osculate overreacting 
-                """   
-                    Now we do a line search inorder to find a productive step size for the gradient descent. 
-                    F(step size) = change in loss from last epoch due to step size 
-                        We want to find the minumum. Where negative change is good. B - A                        
-                        We know that the change in loss for 0 step size is 0.
-                            If we find 2 more points we can create a parabala 
-                            Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
-                            Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
-                            Thus we chose the three points closest to zero
-                            We loop with our exit condition being finding a negative value of F(step size). 
-                        Lastly we step 1.5 times the magnitude of known productive step. 
-                        This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
+        def line_search_parabola():
+            """   
+                Now we do a line search inorder to find a productive step size for the gradient descent. 
+                F(step size) = change in loss from last epoch due to step size 
+                    We want to find the minumum. Where negative change is good. B - A                        
+                    We know that the change in loss for 0 step size is 0.
+                        If we find 2 more points we can create a parabala 
+                        Note: We know that the parabala starts with a negative slope by gradient theory. Tangent line at point of tangential
+                        Note: If we have more than three points we discard the others. Larger sample of points causes overfitting to high degree polynomial which will create problamatic extremas  
+                        Thus we chose the three points closest to zero
+                        We loop with our exit condition being finding a negative value of F(step size). 
+                    Lastly we step 1.5 times the magnitude of known productive step. 
+                    This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
 
-                """
-                
-                buffered_network = self.layers 
+            """
+            
+            last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
+            last_step = step_reset
+
+            buffered_network = self.layers 
+            d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+            loop_count = 0
+            while (d_loss >= 0): #  While there is no improvement with step length, half the step and check again
+                last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
                 d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-                loop_count = 0
-                while (d_loss >= 0): #  While there is no improvement with step length, half the step and check again
-                    last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
-                    d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-                    loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
-                    if loop_count == 30:
-                        last_step = 0
-                        break
-                    if d_loss == 0:
-                        if np.sum(self.feed_forward(batch)) == 0: 
-                            raise Exception("Network is Zeroed out from reLU")
-                            #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
-                            #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
-                        #   Unknown logic: for some reason the small gradient is producing a the same loss as the last epoch
-                        last_step = .0001 # Reset the step to small value
-                        d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
-                        
-                if last_step == 0: 
-                    #probability_of_printing_readout_per_iter = int(probability_of_printing_readout_per_iter/2)
-                    #   The network is now fit to the training data pretty well. So print when fitting occures more often
-                    #   Reason is that new batches can still provide fitting oppurtunities
-                    #   Insure that steps always lower loss for that batch
-                    continue
+                loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
+                if loop_count == 30:
+                    return 0, .001 #  Futer iterations could still provide improvment but this batch is perfectly fit 
+                    
+                if d_loss == 0:
+                    if np.sum(self.feed_forward(batch)) == 0: 
+                        raise Exception("Network is Zeroed out from reLU")
+                        #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
+                        #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
+                
+            #   We now know that the delta loss is negative. Lets optimize the step size further with parabula then finalize step
+            parabala_points_x = [0, last_step,   last_step*1.5] 
+            upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
+            parabala_points_y = [0, d_loss, upstep_delta_loss]
+            parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
 
-                #   We now know that there delta loss is negative. Lets optimize the step size further with parabula then finalize step
-                parabala_points_x = [0, last_step,   last_step*1.5] 
-                upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
-                parabala_points_y = [0, d_loss, upstep_delta_loss]
-                parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
+            #   Parabalas need three non linear points. X points will always be different
+            if parabala_points_y[1] == parabala_points_y[2]: 
+                best_step_index = 1 #   This step is known to be good. Parabula didnt help
+            else:
+                #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
+                parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
+                #    Parabala vertex can be outside safe step size. If so dont add  
+                if parabala_step > step_bounds[0] and parabala_step <= step_bounds[1]: 
+                    delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                    #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
+                    parabala_points_x.append(parabala_step)
+                    parabala_points_y.append(delta_loss_parabala)
+                    parabala_points_loss.append(parabala_loss)
+                best_step_index = np.argmin(parabala_points_y)
 
-                #   Parabalas need three non linear points. X points will always be different
-                if parabala_points_y[1] == parabala_points_y[2]: 
-                    best_step_index = 1 #   This step is known to be good. Parabula didnt help
-                else:
-                    #   Now using the the three points find the min of a parabala. delta_loss(step_size) only min
-                    parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
-                    if parabala_step > step_bounds[0] and parabala_step <= step_bounds[1]: #    Parabala vertex can be outside safe step size. If so dont add  
-                        delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
-                        
-                        #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
-                        parabala_points_x.append(parabala_step)
-                        parabala_points_y.append(delta_loss_parabala)
-                        parabala_points_loss.append(parabala_loss)
-                    best_step_index = np.argmin(parabala_points_y)
+            if parabala_points_x[best_step_index] == 0: 
+                raise Exception("Only negative delta loss should be at this point. Logic bad rewrite")
 
-                if parabala_points_x[best_step_index] == 0: 
-                    raise Exception("Only negative delta loss should be at this point. Logic bad rewrite")
+            #   Finalize Step and prepair for next iteration
+            best_known_step = parabala_points_x[best_step_index] 
+            last_step = best_known_step
+            #last_loss = parabala_points_loss[best_step_index]
+            #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
+            return last_step, .001
+            
+        def static_steps():
+            return 1, .001 #    weights step, biases step
 
-                #   Finalize Step and prepair for next iteration
-                best_known_step = parabala_points_x[best_step_index] 
-                last_step = best_known_step
-                last_loss = parabala_points_loss[best_step_index]
-                self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(gradient)]
-                if (i % probability_of_printing_readout_per_iter) == 0:                  
-                    test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
-                    train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{last_step:.2E}' + "\t Training Loss: " + str(np.round(last_loss, 2))\
-                        + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
-                        
-                    if test_accuracy > 0.99: return # trained
-                inter_epoch_iteration += 1
+        def read_out(message_type):
+            if   message_type == "init":
+                print("\n\n\t\t\t\t\t\t\t\t" + algorithm.upper() + " FIT\n")
+                print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t\t\t Batch Size: " + str(batch_size))        
+            elif message_type == "epoch":
+                print("\n\n\t\t\t\t\t\t\t\t EPOCH: " + str(epoch+1) + "\n-------------------------------------------------------------------------------------------------------\n")
+            elif message_type == "progress":
+                loss = self.get_loss(self, batch, batch_supervision)
+                test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
+                train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
+                print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
+                    + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+            else: raise Exception("No message of type")
 
-    def normal_fit(self, batch_size=12, epochs_limit=3, step_size=1):
-        test_sample_size = 300
+        test_sample_size = 500
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
-        print("\n\n\t\t\t\t\t\t\t\t NORMAL FIT\n")
-        print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t\t\t Batch Size: " + str(batch_size))
+        read_out("init")
 
+        #   Parabolic function vars
+        step_reset = 1
+        step_bounds = (0, 2) #    Do not step negatively below lower, or over above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        
+        #   Select Step Algorithm
+        if algorithm == "parabola": algorithm = line_search_parabola
+        else: algorithm = static_steps
+        
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
-            print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
+            read_out("epoch") 
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
                     i = batch iteration
@@ -465,21 +442,19 @@ class DNN:
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
                 layers_gradients, bias_gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
-                
+
+                #   Find step size for bias and weights
+                step_size_weights, step_size_biases = algorithm()
+
                 #   Perform gradient descent
                 for layer in range(len(layers_gradients)):
-                    self.layers[layer] -= step_size * layers_gradients[layer]
-                    self.biases[layer] -= .001 * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
+                    self.layers[layer] -= step_size_weights * layers_gradients[layer]
+                    self.biases[layer] -= step_size_biases * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
                 
                 #   Progress readout
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
-                    loss = self.get_loss(self, batch, batch_supervision)
-                    test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
-                    train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                    print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
-                        + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
-                    #if test_accuracy > 0.99: return # trained
-                          
+                    read_out("progress")
+                        
 
 class MNIST:
     def __init__(self) -> None:
@@ -533,13 +508,14 @@ data = MNIST()
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
 #dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 dnn = DNN(neurons_per_layer, data=data)
+step_algorithm = "parabola"
 
-dnn.normal_fit(batch_size=11, epochs_limit=1, step_size=1)
+dnn.fit(batch_size=11, epochs_limit=1, algorithm=step_algorithm)
 
-dnn.normal_fit(batch_size=32, epochs_limit=1, step_size=.5)
+dnn.normal_fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
 #dnn.parabalic_fit(batch_size=10, epochs_limit=5)
 
-#   Add bias and gradient  
+#   Mix parabalic fit and normal fit into one function
 
 #   parabalic fit underperforming and way slow. regulizer really slows things down but it works at keeping weights small. no value in accuracy so far though
 
