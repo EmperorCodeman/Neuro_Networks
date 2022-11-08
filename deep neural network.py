@@ -95,7 +95,7 @@ class ACTIVATIONS:
         return dendritic_input
 
 class LOSS_FUNCTIONS:
-    accuracy_importance, normality_importance = .7, .3
+    accuracy_importance, normality_importance = .9, .1
     regulizer_exponential = 12 # Must be even so no negatives
 
     @staticmethod
@@ -142,6 +142,7 @@ class LOSS_FUNCTIONS:
         #   This is the rate of change of the regulizer term in terms of the weights. Not final z. Seperate from backprogation 
         return [ (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size) * (layer**(LOSS_FUNCTIONS.regulizer_exponential-1)) for layer in dnn.layers ]
 
+
 class DNN:
     def __init__(self, neurons_per_layer, data,\
             loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed],\
@@ -169,7 +170,6 @@ class DNN:
                 #   We divide by the layers neurons so that biases do not increase the magnitiude of the flow as it moves layer to layer
                 #   However note that gradient desent will optimize from here with possibly unstable numerical magnitudes 
                 biases.append( np.random.uniform(-1, 1, layer.shape[0]).reshape(layer.shape[0], 1)  / layer.shape[0] )
-            biases = np.zeros_like(biases) #    Remove biases
             return biases
 
          #  Attach data set to DNN. You can switch data set at any time for transfer learning
@@ -243,7 +243,20 @@ class DNN:
         batch_size = batch.shape[1]
         return sum(np.argmax(self.feed_forward(batch), axis=0) == np.argmax(batch_supervision, axis=0)) / batch_size
 
-    def get_gradient(self, batch, supervision):
+    def get_gradient(self, batch, supervision, normalize=True):
+        
+        def normalize_tensors(tensors, biases=False):
+            for i, t in enumerate(tensors):
+                    if biases:
+                        tensor_magnitude = np.sum(t**2, axis=0)**.5
+                        tensor_magnitude[tensor_magnitude==0] = 1 # Prevent division by 0
+                        tensors[i] = t / tensor_magnitude #   Normalize
+                    else:    
+                        tensor_magnitude = np.sum(t**2)**.5
+                        if tensor_magnitude == 0: continue
+                        tensors[i] = t / tensor_magnitude #   Normalize
+            return tensors
+
         #   Mean squared error method
         # loss_primed = self.loss_primed(self, batch, supervision) 
         # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
@@ -252,18 +265,28 @@ class DNN:
          
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
+        #   Backpropagate Loss
         loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
         loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
         
+        #   Loss in terms of loss is just the rate of change of loss in terms of the weighted input. Because bias just adds to to the weighted input. 
+        #   Normalize the bias gradients 
+        bias_gradients = normalize_tensors([loss_in_terms_of_z_1, loss_in_terms_of_z_2], biases=True) 
+
         #   Partial loss from accuracy in terms of specific layers weights
         gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() ) 
         gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
+        
         #   Add the Partial loss from regularization terms
         regulaizer_gradients = LOSS_FUNCTIONS.regularize_weights_primed(dnn)
         gradient_layer_1 += regulaizer_gradients[0]
         gradient_layer_2 += regulaizer_gradients[1]
 
-        return [gradient_layer_1, gradient_layer_2]
+        layers_gradients = [gradient_layer_1, gradient_layer_2]
+
+        if normalize: gradients = normalize_tensors(layers_gradients)
+            
+        return layers_gradients, bias_gradients
 
     def parabalic_fit(self, batch_size=12, epochs_limit=3):
         #   Doubling batch size doubles the speed of a epoch. Smaller batch size, slower epoch but less general
@@ -303,14 +326,14 @@ class DNN:
             vertex_x = -B / (2*A)
             return vertex_x
 
-        last_step = 1
+        last_step = .5
         test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
-        step_bounds = (0, 5) #    Do not step negatively below lower, or over above upper. If parabula vertex interpolates outside bounds then revert to known loss inside bounds  
-
-        print("\n\n\n\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
+        step_bounds = (0, 2) #    Do not step negatively below lower, or over above upper. If parabula vertex interpolates outside bounds then revert to known loss inside bounds  
+        print("\n\n\n\t\t\t\t\t\t Parabalic Fit")
+        print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t Batch Size: " + str(batch_size))
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 1
             print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
@@ -334,7 +357,7 @@ class DNN:
                     if gradients_magnitude == 0: continue
                     gradient[ii] = layers_gradient / gradients_magnitude #   Normalize
                 last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
-                if last_step > 1: last_step = 1 #   Large delta loss due to large step size over fits the net to current batch/iteration. This causes the descent to aimlessly osculate overreacting 
+                if last_step > step_bounds[1]: last_step = .5 #   Large delta loss due to large step size over fits the net to current batch/iteration. This causes the descent to aimlessly osculate overreacting 
                 """   
                     Now we do a line search inorder to find a productive step size for the gradient descent. 
                     F(step size) = change in loss from last epoch due to step size 
@@ -414,16 +437,16 @@ class DNN:
                     if test_accuracy > 0.99: return # trained
                 inter_epoch_iteration += 1
 
-    def normal_fit(self, batch_size=12, epochs_limit=3):
-        step_size = 1
-        test_sample_size = 500
+    def normal_fit(self, batch_size=12, epochs_limit=3, step_size=1):
+        test_sample_size = 300
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
-        print("\n\n\t\t\t\t\t Normal Fit")
+        print("\n\n\t\t\t\t\t\t\t\t NORMAL FIT\n")
+        print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t\t\t Batch Size: " + str(batch_size))
 
         for epoch in range(epochs_limit): 
-            inter_epoch_iteration = 1
+            inter_epoch_iteration = 0
             print("\n\n\t\t\t EPOCH: " + str(epoch+1) + "\n------------------------------------------------------------------------\n")
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
@@ -437,25 +460,26 @@ class DNN:
                         This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
                         Thus we randomize the sequence of windows 
                 """
+                #   Update batch and gradients for current iteration
+                inter_epoch_iteration += 1     
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
-                gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
+                layers_gradients, bias_gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
                 
-                for ii, layers_gradient in enumerate(gradients):
-                    gradients_magnitude = np.sum(layers_gradient**2)**.5
-                    if gradients_magnitude == 0: continue
-                    layers_gradient = layers_gradient / gradients_magnitude #   Normalize
-                    self.layers[ii] -= step_size * layers_gradient
+                #   Perform gradient descent
+                for layer in range(len(layers_gradients)):
+                    self.layers[layer] -= step_size * layers_gradients[layer]
+                    self.biases[layer] -= .001 * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
                 
+                #   Progress readout
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
                     loss = self.get_loss(self, batch, batch_supervision)
                     test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                     train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
                     print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
                         + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
-                    if test_accuracy > 0.99: return # trained
-                inter_epoch_iteration += 1               
-               
+                    #if test_accuracy > 0.99: return # trained
+                          
 
 class MNIST:
     def __init__(self) -> None:
@@ -510,13 +534,15 @@ neurons_per_layer = [1000] # First layers neuron count. Second layer defined imp
 #dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 dnn = DNN(neurons_per_layer, data=data)
 
-#dnn.normal_fit(batch_size=11, epochs_limit=5)
-dnn.parabalic_fit(batch_size=11, epochs_limit=5)
+dnn.normal_fit(batch_size=11, epochs_limit=1, step_size=1)
 
- 
+dnn.normal_fit(batch_size=32, epochs_limit=1, step_size=.5)
+#dnn.parabalic_fit(batch_size=10, epochs_limit=5)
 
-#   Add term to loss for weights mag.  squar root of average squared weight * importance this as a constant 
 #   Add bias and gradient  
+
+#   parabalic fit underperforming and way slow. regulizer really slows things down but it works at keeping weights small. no value in accuracy so far though
+
 
 
 
