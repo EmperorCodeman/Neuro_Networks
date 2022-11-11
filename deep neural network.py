@@ -95,7 +95,7 @@ class ACTIVATIONS:
         return dendritic_input
 
 class LOSS_FUNCTIONS:
-    accuracy_importance = .95 # [0,1]
+    accuracy_importance = 1 # [0,1]
     normality_importance = 1 - accuracy_importance
     regulizer_exponential = 12 # Must be even so no negatives
 
@@ -201,8 +201,8 @@ class DNN:
         layers.append(initialize_layer(data.train_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
         
-        #   Data storage for layers outputs
-        self.flows = [None] * len(layers)
+        #   Data storage for layers outputs and input data as first flow, ie output of nothing
+        self.flows = [None] * (len(layers)+1)
 
         #   Store number of weights of network
         self.network_size = np.sum([layer.size for layer in layers])
@@ -224,19 +224,20 @@ class DNN:
     def feed_forward(self, input, forward_propagating=False):
         #   Parse independent vars, ie observation into the networks first layer and process activation func if network has hidden layers 
         if forward_propagating:
+            self.flows[0] = input #  I think of the input as just another part of the flow. This simplifies induction
             #   Save each output per layer for backpropagating. optimization 
             if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.  
-                self.flows[0] = self.layers[0] @ input + self.biases[0] #    Backpropagation uses the weighted input unactivated
-                flow = self.hidden_activation( self.flows[0] )
+                self.flows[1] = self.layers[0] @ input + self.biases[0] #    Backpropagation uses the weighted input unactivated
+                flow = self.hidden_activation( self.flows[1] )
             else:
-                self.flows[0] = self.layers[0] @ input + self.biases[0]
-                flow = self.final_activation(  self.flows[0] ) 
+                self.flows[1] = self.layers[0] @ input + self.biases[0]
+                flow = self.final_activation(  self.flows[1] ) 
                 return flow    
 
             #   Flow and use activation function for all hiden layers
             for i, layer in enumerate(self.layers[1:-1]):
-                self.flows[i+1] = layer @ flow + self.biases[i] 
-                flow = self.hidden_activation( self.flows[i+1] )
+                self.flows[i+2] = layer @ flow + self.biases[i] 
+                flow = self.hidden_activation( self.flows[i+2] )
                 
             #   All activations can be different, we only change the final activation for simplicity 
             self.flows[-1] = self.layers[-1] @ flow  + self.biases[-1] 
@@ -278,36 +279,38 @@ class DNN:
                         tensors[i] = t / tensor_magnitude #   Normalize
             return tensors
 
-        #   Mean squared error method
-        # loss_primed = self.loss_primed(self, batch, supervision) 
-        # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        # gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        # gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
+        # TODO !!!!!!!!!!! Add the urls of the proofs
+        #   Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
          
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
         #   Backpropagate Loss
-        loss_in_terms_of_z_2 = self.loss_primed(self, batch, supervision) 
-        loss_in_terms_of_z_1 = self.layers[1].transpose() @ loss_in_terms_of_z_2 * self.hidden_activation_primed(self.flows[0]) 
-        
-        #   Loss in terms of loss is just the rate of change of loss in terms of the weighted input. Because bias just adds to to the weighted input. 
+        loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
+        loss_in_terms_of_flows = [loss_in_terms_of_z_final]
+        for flow in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
+            loss_in_terms_of_flows.append( self.layers[flow+1].transpose() @ loss_in_terms_of_flows[-1] * self.hidden_activation_primed(self.flows[flow+1]) ) 
+        #  Reverse from backprop order for logical order of layers
+        loss_in_terms_of_flows.reverse()
+
+        #   Loss in terms of bias is just the rate of change of loss in terms of the flow. Because bias just adds to to the flow linearly. 
         #   Normalize the bias gradients 
-        bias_gradients = normalize_tensors([loss_in_terms_of_z_1, loss_in_terms_of_z_2], biases=True) 
+        supervision_loss_in_terms_of_biases = normalize_tensors(loss_in_terms_of_flows, biases=True) 
+        #   Todo examin bias magnitudes and consider added it to regulizer
 
-        #   Partial loss from accuracy in terms of specific layers weights
-        gradient_layer_1 = loss_in_terms_of_z_1 @ self.hidden_activation( batch.transpose() ) 
-        gradient_layer_2 = loss_in_terms_of_z_2 @ self.hidden_activation( self.flows[0].transpose() )
-        
-        #   Add the Partial loss from regularization terms
-        regulaizer_gradients = LOSS_FUNCTIONS.regularize_weights_primed(dnn)
-        gradient_layer_1 += regulaizer_gradients[0] #   Do not weight this sum. This is the proven gradient. Weight the importance of regulization in LOSS functions static var for that
-        gradient_layer_2 += regulaizer_gradients[1]
-
-        layers_gradients = [gradient_layer_1, gradient_layer_2]
-
-        if normalize: gradients = normalize_tensors(layers_gradients)
+        #   Loss in terms of a layers weights
+        supervision_loss_in_terms_of_weights = [] # Each index is its respective layers partials
+        for i, loss_in_terms_of_flow in enumerate(loss_in_terms_of_flows):  
+            supervision_loss_in_terms_of_weights.append( loss_in_terms_of_flow @ self.hidden_activation( self.flows[i].transpose() ) ) 
             
-        return layers_gradients, bias_gradients
+        #   Add the loss term from regularization
+        regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(dnn) 
+        #  Do not weight this sum. This is the proven gradient. Weight the importance of regulization in LOSS functions static var for that
+        total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )]
+        
+        #   We can now normalize the full gradients in terms of each layer 
+        if normalize: layers_gradients = normalize_tensors(total_loss_in_terms_of_weights)
+            
+        return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
     def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
 
@@ -427,6 +430,9 @@ class DNN:
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
                 print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
                     + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+            elif "final":
+                print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
+                read_out("progress")
             else: raise Exception("No message of type")
 
         def perform_drop_out():
@@ -540,7 +546,7 @@ class DNN:
                 
         #   Undo Dropout and Print out final results of fit call
         undo_drop_out()     
-        read_out("progress")           
+        read_out("final")           
 
 class MNIST:
     def __init__(self) -> None:
@@ -592,14 +598,14 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [.2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+drop_out_per_layer = [.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 #TODO pass drop rates to constructor, changing the shape of net respectively. From there we can transfer learn with new calls to fit
 
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
-dnn.fit(batch_size=11, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=11, epochs_limit=2, algorithm=step_algorithm)
 
 #   parabalic fit underperforming and way slow. regulizer really slows things down but it works at keeping weights small. no value in accuracy so far though
 
@@ -612,7 +618,6 @@ dnn.fit(batch_size=11, epochs_limit=1, algorithm=step_algorithm)
 
 
 
-#dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 """
     Optimization. Use memory in dnn and access it so no need to recall. self.flows not used enough 
 
@@ -635,5 +640,16 @@ dnn.fit(batch_size=11, epochs_limit=1, algorithm=step_algorithm)
                 include var for personality of player. risk aversion
                     personality of user unknown to net. 
                     memory needed inorder to case player and mesure player personality 
+
+
+DEAD CODE
+
+#   Mean squared error method
+        # loss_primed = self.loss_primed(self, batch, supervision) 
+        # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        # gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+        # gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
+
+dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 
 """
