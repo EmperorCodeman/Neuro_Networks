@@ -190,12 +190,12 @@ class DNN:
             number_of_neurons_to_keep.append( int(neurons_in_layer * drop_not) ) 
         self.all_neuron_indicies = all_neuron_indicies
         self.number_of_neurons_to_keep = number_of_neurons_to_keep #    The last layer always keeps all its neurons thus is not included
-        self.kept_weights = None
+        self.kept_weights = None # Used to revert from dropout 
 
         #   Initialize all layers weights as np objects with the shapes as given from neurons per layer
         input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0]) #  Plus one is for bias
         layers = [input_layer]
-        for i, neural_count in enumerate(neurons_per_layer[1:-1]): #  Hidden layers 
+        for i, neural_count in enumerate(neurons_per_layer[1:]): #  Hidden layers 
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
         #   Init the final layer. It conforms its shape entirely and is not programable
         layers.append(initialize_layer(data.train_supervision.shape[0], neurons_per_layer[-1]))
@@ -218,7 +218,7 @@ class DNN:
         self.hidden_activation, self.hidden_activation_primed = hidden_layers_activation_and_prime
         self.final_activation, self.final_activation_primed = final_activation_and_prime
 
-        #   Tie Loss 
+        #   Tie Loss and its prime
         self.get_loss, self.loss_primed = loss_function_and_prime 
 
     def feed_forward(self, input, forward_propagating=False):
@@ -236,7 +236,7 @@ class DNN:
 
             #   Flow and use activation function for all hiden layers
             for i, layer in enumerate(self.layers[1:-1]):
-                self.flows[i+2] = layer @ flow + self.biases[i] 
+                self.flows[i+2] = layer @ flow + self.biases[i+1] 
                 flow = self.hidden_activation( self.flows[i+2] )
                 
             #   All activations can be different, we only change the final activation for simplicity 
@@ -253,7 +253,7 @@ class DNN:
 
             #   Flow and use activation function for all hiden layers
             for i, layer in enumerate(self.layers[1:-1]):
-                flow = self.hidden_activation( layer @ flow  + self.biases[i] )
+                flow = self.hidden_activation( layer @ flow  + self.biases[i+1] )
                 
             #   Forgo activation function on the last function 
             flow = self.final_activation(self.layers[-1] @ flow + self.biases[-1] )
@@ -279,6 +279,10 @@ class DNN:
                         tensors[i] = t / tensor_magnitude #   Normalize
             return tensors
 
+        """
+            We set the variables of our loss function differently from one point to another, inorder simplify induction and differentiatation
+            loss in terms of flows, or loss in terms of weights for a given layer etc. We do not differentiate in terms of the first flow which is the batch, thus the size difference between flows and loss in terms of flows  
+        """
         # TODO !!!!!!!!!!! Add the urls of the proofs
         #   Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
 
@@ -287,11 +291,12 @@ class DNN:
         
         #   Backpropagate Loss in terms of flows
         loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
-        supervision_loss_in_terms_of_flows = [loss_in_terms_of_z_final]
-        for flow in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
-            supervision_loss_in_terms_of_flows.append( self.layers[flow+1].transpose() @ supervision_loss_in_terms_of_flows[-1] * self.hidden_activation_primed(self.flows[flow+1]) ) 
+        supervision_loss_in_terms_of_flows = [None] * len(self.layers)
+        supervision_loss_in_terms_of_flows[-1] = loss_in_terms_of_z_final # First step of induction is done by hand. From there we loop in reverse:
+        for layer in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
+            supervision_loss_in_terms_of_flows[layer] = self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_flows[layer+1] * self.hidden_activation_primed(self.flows[layer+1]) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
         #  Reverse from backprop order for logical order of layers
-        supervision_loss_in_terms_of_flows.reverse()
+        #supervision_loss_in_terms_of_flows.reverse()
         
         #   Loss in terms of a layers weights
         supervision_loss_in_terms_of_weights = [] # Each index is its respective layers partials
@@ -469,8 +474,8 @@ class DNN:
                 layers_kept_rows = self.all_neuron_indicies[layer+1][:number_of_neurons_to_keep]
                 layers_kept_columns = self.all_neuron_indicies[layer][:self.number_of_neurons_to_keep[layer]]  
                 kept_weights.append( [ layers_kept_rows, layers_kept_columns] )
-                self.layers[layer] = self.buffered_layers[ layers_kept_rows, layers_kept_columns ]
-                self.biases[layer] = self.buffered_biases[ layers_kept_rows ]
+                self.layers[layer+1] = self.buffered_layers[layer+1][ layers_kept_rows ][ :, layers_kept_columns ]
+                self.biases[layer+1] = self.buffered_biases[layer+1][ layers_kept_rows ]
                 
 
             #   Final layer only drops out columns due to previous layers rows being dropped 
@@ -486,7 +491,7 @@ class DNN:
             self.buffered_biases[0][self.kept_weights[0]] = self.biases[0]
 
             for layer in range(1, len(self.layers)-1):
-                self.buffered_layers[layer][self.kept_weights[layer][0], self.kept_weights[layer][1]] = self.layers[layer]
+                self.buffered_layers[layer][self.kept_weights[layer][0]][:, self.kept_weights[layer][1]] = self.layers[layer]
                 self.buffered_biases[layer][self.kept_weights[layer][0]] = self.biases[layer]
                
             self.buffered_layers[-1][:, self.kept_weights[-1]] = self.layers[-1]
@@ -505,8 +510,8 @@ class DNN:
         normalize_gradients = True
 
         #   Parabolic function vars
-        step_reset = 1 #    Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
-        step_bounds = (0, 2) #    Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_reset = .5 #    Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
+        step_bounds = (0, 1) #    Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
@@ -612,7 +617,7 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [.2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+drop_out_per_layer = [.2, .2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 #TODO pass drop rates to constructor, changing the shape of net respectively. From there we can transfer learn with new calls to fit
 
 
@@ -621,8 +626,10 @@ step_algorithm = "parabola"
 
 dnn.fit(batch_size=16, epochs_limit=1, algorithm=step_algorithm)
 
-#   Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call. decrease the bounds of the step as test accuracy increases 
-
+#   use cupy
+#   decrease the bounds of the step as test accuracy increases
+#   Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
+#   Use the saved flows for loss primed calculation for optimization no need to feed forward unless weights changed
 
 
 
