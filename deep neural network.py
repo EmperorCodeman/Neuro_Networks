@@ -281,35 +281,40 @@ class DNN:
 
         # TODO !!!!!!!!!!! Add the urls of the proofs
         #   Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
-         
+
+        #   Forward Propagate flows 
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
-        #   Backpropagate Loss
+        #   Backpropagate Loss in terms of flows
         loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
-        loss_in_terms_of_flows = [loss_in_terms_of_z_final]
+        supervision_loss_in_terms_of_flows = [loss_in_terms_of_z_final]
         for flow in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
-            loss_in_terms_of_flows.append( self.layers[flow+1].transpose() @ loss_in_terms_of_flows[-1] * self.hidden_activation_primed(self.flows[flow+1]) ) 
+            supervision_loss_in_terms_of_flows.append( self.layers[flow+1].transpose() @ supervision_loss_in_terms_of_flows[-1] * self.hidden_activation_primed(self.flows[flow+1]) ) 
         #  Reverse from backprop order for logical order of layers
-        loss_in_terms_of_flows.reverse()
-
-        #   Loss in terms of bias is just the rate of change of loss in terms of the flow. Because bias just adds to to the flow linearly. 
-        #   Normalize the bias gradients 
-        supervision_loss_in_terms_of_biases = normalize_tensors(loss_in_terms_of_flows, biases=True) 
-        #   Todo examin bias magnitudes and consider added it to regulizer
-
+        supervision_loss_in_terms_of_flows.reverse()
+        
         #   Loss in terms of a layers weights
         supervision_loss_in_terms_of_weights = [] # Each index is its respective layers partials
-        for i, loss_in_terms_of_flow in enumerate(loss_in_terms_of_flows):  
-            supervision_loss_in_terms_of_weights.append( loss_in_terms_of_flow @ self.hidden_activation( self.flows[i].transpose() ) ) 
-            
+        for i, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_flows):  
+            supervision_loss_in_terms_of_weights.append( supervision_loss_in_terms_of_flow @ self.hidden_activation( self.flows[i].transpose() ) )
+
         #   Add the loss term from regularization
         regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(dnn) 
-        #  Do not weight this sum. This is the proven gradient. Weight the importance of regulization in LOSS functions static var for that
+        #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
         total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )]
         
-        #   We can now normalize the full gradients in terms of each layer 
-        if normalize: layers_gradients = normalize_tensors(total_loss_in_terms_of_weights)
-            
+        #   We can now normalize the full gradients in place in terms of each layer 
+        if normalize: normalize_tensors(total_loss_in_terms_of_weights)
+
+        #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. 
+        #   Normalize the bias gradients 
+        if normalize: # Warning: If you place this before loss in terms of flows is used it will break because it changes the input in place
+            # Normalize changes in place but for readablity I assign it to a newly named var. 
+            supervision_loss_in_terms_of_biases = normalize_tensors(supervision_loss_in_terms_of_flows, biases=True) 
+        else:
+            supervision_loss_in_terms_of_biases = supervision_loss_in_terms_of_flows
+        #   Todo examin bias magnitudes and consider adding bias magnitude to regulizer:
+
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
     def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
@@ -416,23 +421,31 @@ class DNN:
             return last_step, .001
             
         def static_steps():
-            return 1, .001 #    weights step, biases step
+            #    Step a portion of the normal gradient. Note. In a uniform dist, the scale of elements is changed by 1/size. Thus you might vanish. 
+            normalize_gradients = True 
+            return 1, .001 #    weights step, biases step. Not thought out well
 
         def read_out(message_type):
             if   message_type == "init":
-                print("\n\n\t\t\t\t\t\t\t\t" + algorithm.upper() + " FIT\n")
-                print("\t\t\t\t\t\tNeurons: " + str(self.layers[0].shape[0]) + "\t\t\t\t Batch Size: " + str(batch_size))        
+                if normalize_gradients:
+                    normalize_gradients_ = " using Normalized Gradients"
+                else: 
+                    normalize_gradients_ = " not using Normalized Gradients"
+                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_)
+                print("\n\t\t\t\t\t\tNeurons per Layer: " + str(neurons_per_layer) + "\t\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(drop_out_per_layer) + \
+                    "\t\t\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
             elif message_type == "epoch":
-                print("\n\n\t\t\t\t\t\t\t\t EPOCH: " + str(epoch+1) + "\n-------------------------------------------------------------------------------------------------------\n")
+                print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
             elif message_type == "progress":
                 loss = self.get_loss(self, batch, batch_supervision)
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                print("\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
+                print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
                     + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
             elif "final":
                 print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
                 read_out("progress")
+                print("\n\n\n")
             else: raise Exception("No message of type")
 
         def perform_drop_out():
@@ -489,16 +502,17 @@ class DNN:
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
-        read_out("init")
+        normalize_gradients = True
 
         #   Parabolic function vars
-        step_reset = 1
-        step_bounds = (0, 5) #    Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_reset = 1 #    Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
+        step_bounds = (0, 2) #    Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
         else: algorithm = static_steps
         
+        read_out("init")
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
             read_out("epoch") 
@@ -523,13 +537,13 @@ class DNN:
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
 
-                #   Update gradient for batch
-                layers_gradients, bias_gradients = self.get_gradient(batch, batch_supervision) #    Gradiant of all layers
+                #   Update gradient in terms of weights and biases for new iteration's batch
+                layers_gradients, bias_gradients = self.get_gradient(batch, batch_supervision, normalize=normalize_gradients) 
 
                 #   Find step size for bias and weights
                 step_size_weights, step_size_biases = algorithm()
                 if step_size_weights == 0: 
-                    continue
+                    continue # Indicates wonky behavior
 
                 #   Update the bufferes with the new trained weights
                 update_buffers()
@@ -598,17 +612,16 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+drop_out_per_layer = [.2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 #TODO pass drop rates to constructor, changing the shape of net respectively. From there we can transfer learn with new calls to fit
 
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
-dnn.fit(batch_size=11, epochs_limit=2, algorithm=step_algorithm)
+dnn.fit(batch_size=16, epochs_limit=1, algorithm=step_algorithm)
 
-#   parabalic fit underperforming and way slow. regulizer really slows things down but it works at keeping weights small. no value in accuracy so far though
-
+#   Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call. decrease the bounds of the step as test accuracy increases 
 
 
 
