@@ -279,78 +279,75 @@ class DNN:
             return tensors
 
         """
+            The idea of backpropagation is that a networks loss from the perspective of a layer is not affected by previous layers. Because a net feeds forward
+            Therefore we use the chain rule to only process the loss in terms of the layer being looked at, not earlier layers. 
+            We backprogate because the chain rule goes from the outter functions in, and in until the variable is reached. Ie a specific layer
+                delta loss / weights_3 = delta loss / activation final * delta activation final / z final * delta z final / weights_3 where delta z final / weights_3 is expanded with the chain rule till d weights_3/d weights_3 is reached 
+                Notice that previous factors of the layers derivitive are allready known from earlier layers derivitives. 
+                We start by hand taking the deriviative. 
+                I SPENT 4 DAYS WITH THIS PROBLEM. !!!
+                    Cross entropy prime and softmax prime merge to form yhat - y.  this is delta cross entropy / a_final * delta a_final / z final = yhat - y
+                    Thus the second layer which used the firsts partial does not use relu prime of previous layers activation
+                    Also!! THe last layer is the input data. Thus is has no activation. This was the killer. Do no activate last term of delta loss/first layer weights      
             We set the variables of our loss function differently from one point to another, inorder simplify induction and differentiatation
             loss in terms of flows, or loss in terms of weights for a given layer etc. We do not differentiate in terms of the first flow which is the batch, thus the size difference between flows and loss in terms of flows  
-        """
-        #https://towardsdatascience.com/derivative-of-the-softmax-function-and-the-categorical-cross-entropy-loss-ffceefc081d1
-        #https://towardsdatascience.com/deriving-the-backpropagation-equations-from-scratch-part-2-693d4162e779
-        #   Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
+            Review these, they gave me trouble 
+                https://towardsdatascience.com/derivative-of-the-softmax-function-and-the-categorical-cross-entropy-loss-ffceefc081d1
+                https://towardsdatascience.com/deriving-the-backpropagation-equations-from-scratch-part-2-693d4162e779
+                These explanations above did not work. Note: delta loss / delta flow = delta loss / delta activation * delta activation / delta flow. notice delta activation in denominator and numerator. They cancel 
+                The below explanation did work. Above may work now that I understand it better
+                https://github.com/marcospgp/backpropagation-from-scratch/blob/master/backpropagation-from-scratch.pdf
+                Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
+            The induction in back prop takes 2 steps before its recursive for partial loss in terms of weighted inputs. 
+            For the loss in tems of the weights using the above partial as a component. The induction is recursive for all the the first and last layers. 
 
+        """
+        
         #   Forward Propagate flows 
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
         #   Backpropagate Loss in terms of flows
         loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
-        supervision_loss_in_terms_of_flows = [None] * len(self.layers)
-        supervision_loss_in_terms_of_flows[2] = loss_in_terms_of_z_final # First step of induction is done by hand. From there we loop in reverse:
-        #for layer in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
-        #    supervision_loss_in_terms_of_flows[layer] = self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_flows[layer+1] * self.hidden_activation_primed(self.flows[layer+1]) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
+        supervision_loss_in_terms_of_activations = [None] * len(self.layers)
+        supervision_loss_in_terms_of_activations[-1] = loss_in_terms_of_z_final # First step of induction is done by hand. 
+        supervision_loss_in_terms_of_activations[-2] = self.layers[-1].transpose() @ supervision_loss_in_terms_of_activations[-1] # Second step uses the proof that combines delta cross entropy with delta softmax. They are factors of each other by the chain rule   
         
-        #supervision_loss_in_terms_of_flows[1] = self.layers[-1].transpose() @ supervision_loss_in_terms_of_flows[-1] * self.hidden_activation_primed(self.flows[2])
-        #supervision_loss_in_terms_of_flows[0] = self.layers[1].transpose() @ supervision_loss_in_terms_of_flows[1] * self.hidden_activation_primed(self.flows[1])
-        
-        #supervision_loss_in_terms_of_flows[1] = self.layers[-1].transpose() @ ( self.hidden_activation_primed(self.feed_forward(batch)) * supervision_loss_in_terms_of_flows[-1] )
-        supervision_loss_in_terms_of_flows[1] = self.layers[2].transpose() @ supervision_loss_in_terms_of_flows[2] 
-        
-        supervision_loss_in_terms_of_flows[0] = self.layers[1].transpose() @ (  self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_flows[1] )
+        #supervision_loss_in_terms_of_activations[0] = self.layers[1].transpose() @ (  self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_activations[1] )
+ 
+        for layer in reversed( range(len(self.layers)-2) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
+            supervision_loss_in_terms_of_activations[layer] = self.layers[layer+1].transpose() @ ( self.hidden_activation_primed(self.flows[layer+2]) * supervision_loss_in_terms_of_activations[layer+1] ) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
         
         
         
         # TODO Do all by hand. comment out the loops
-        #   Loss in terms of a layers weights
-        supervision_loss_in_terms_of_weights = [None]*3 # Each index is its respective layers partials
-        # for i, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_flows):  
-        #     supervision_loss_in_terms_of_weights.append( supervision_loss_in_terms_of_flow @ self.hidden_activation( self.flows[i].transpose() ) )
-        #supervision_loss_in_terms_of_weights.append( supervision_loss_in_terms_of_flows[0] @ self.hidden_activation( self.flows[0].transpose() ) )
-        #supervision_loss_in_terms_of_weights.append( supervision_loss_in_terms_of_flows[1] @ self.hidden_activation( self.flows[1].transpose() ) )
-        #supervision_loss_in_terms_of_weights.append( supervision_loss_in_terms_of_flows[2] @ self.hidden_activation( self.flows[2].transpose() ) )
+        #   Loss in terms of a layers weights. Think of this as    loss in terms of flows for the layer times its input and output. out_transpose * delta @ in_transpose
+        supervision_loss_in_terms_of_weights = [None]*len(self.layers) # Each index is its respective layers partials
+        supervision_loss_in_terms_of_weights[0] = (self.hidden_activation_primed(self.flows[1]) * supervision_loss_in_terms_of_activations[0]) @ self.flows[0].transpose() #  First layer is not inductive because the input is not activated. its the data set
+
+
+        for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[1:-1]):  
+            layer += 1 #    First layer skipped
+            supervision_loss_in_terms_of_weights[layer] = (self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]) @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers
+        #supervision_loss_in_terms_of_weights[1] =     (self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_activations[1]) @ self.hidden_activation( self.flows[1].transpose() ) 
         
-        
-        supervision_loss_in_terms_of_weights[0] = (self.hidden_activation_primed(self.flows[1]) * supervision_loss_in_terms_of_flows[0]) @ self.flows[0].transpose()  
-        supervision_loss_in_terms_of_weights[1] = (self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_flows[1]) @ self.hidden_activation( self.flows[1].transpose() ) 
-        supervision_loss_in_terms_of_weights[2] = supervision_loss_in_terms_of_flows[2] @ self.hidden_activation( self.flows[2].transpose() ) 
+        supervision_loss_in_terms_of_weights[-1] = supervision_loss_in_terms_of_activations[-1] @ self.hidden_activation( self.flows[-2].transpose() )  
+
         regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(dnn) # Do not normalize. This is a term of the loss
         #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
-        total_loss_in_terms_of_weights = supervision_loss_in_terms_of_weights#[ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )]
+        total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )]
         
-        supervision_loss_in_terms_of_biases = [None] * 3
-        supervision_loss_in_terms_of_biases[2] = supervision_loss_in_terms_of_flows[2]
-        supervision_loss_in_terms_of_biases[1] = self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_flows[1]
-        supervision_loss_in_terms_of_biases[0] = self.hidden_activation_primed(self.flows[1]) * supervision_loss_in_terms_of_flows[0]
-        
-
-        #   We can now normalize the full gradients in place in terms of each layer 
-        if normalize: normalize_tensors(total_loss_in_terms_of_weights)
+        supervision_loss_in_terms_of_biases = [None] * len(self.layers)
+        supervision_loss_in_terms_of_biases[-1] = supervision_loss_in_terms_of_activations[-1] #  Not inductive yet because of derivitive of loss and chain to derivitive of final activation 
+        #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
+        for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[:-1]): #   Last layer already done
+            supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]
+   
+        #   We can now normalize the full gradients in place in terms of each layer.  
+        if normalize: normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
 
         if normalize: # Warning: If you place this before loss in terms of flows is used it will break because it changes the input in place
-            #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. 
-            # Normalize changes in place but for readablity I assign it to a newly named var. 
-            supervision_loss_in_terms_of_biases = normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) 
+            normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) 
         #   Todo examin bias magnitudes and consider adding bias magnitude to regulizer:
-
-        #i, ii = 1, 2
-        i = 1
-        #supervision_loss_in_terms_of_biases[i] = np.zeros_like(supervision_loss_in_terms_of_biases[i])
-        #total_loss_in_terms_of_weights[i] = np.zeros_like(total_loss_in_terms_of_weights[i])
-        
-        #supervision_loss_in_terms_of_biases[ii] = np.zeros_like(supervision_loss_in_terms_of_biases[ii])
-        #total_loss_in_terms_of_weights[ii] = np.zeros_like(total_loss_in_terms_of_weights[ii])
-        # co = .001
-        # supervision_loss_in_terms_of_biases[i] *= co
-        # total_loss_in_terms_of_weights[i] *= co
-        # supervision_loss_in_terms_of_biases[ii] *= co
-        # total_loss_in_terms_of_weights[ii] *= co
-        
 
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
@@ -582,14 +579,14 @@ class DNN:
                 if step_size_weights == 0: 
                     continue # Indicates wonky behavior
 
-                #   Update the bufferes with the new trained weights
-                #update_buffers()
-
-                #   Perform  Stocastic Gradient Descent
+                #   Perform Mini Batch Gradient Descent
                 for layer in range(len(layers_gradients)):
                     self.layers[layer] -= step_size_weights * layers_gradients[layer]
                     self.biases[layer] -= step_size_biases * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
-                
+
+                #   Update the bufferes with the new trained weights
+                #update_buffers()
+
                 #   Progress Readout
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
                     read_out("progress")
@@ -654,7 +651,7 @@ drop_out_per_layer = [0.0, .0] # Dropout will adapt the net to noise. Missing re
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
-dnn.fit(batch_size=11, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=11, epochs_limit=2, algorithm=step_algorithm)
 dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
 
 """
