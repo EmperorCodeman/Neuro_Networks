@@ -303,6 +303,8 @@ class DNN:
 
         """
         
+        #   TODO optimize by storing activated flows  
+
         #   Forward Propagate flows 
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
         
@@ -311,44 +313,30 @@ class DNN:
         supervision_loss_in_terms_of_activations = [None] * len(self.layers)
         supervision_loss_in_terms_of_activations[-1] = loss_in_terms_of_z_final # First step of induction is done by hand. 
         supervision_loss_in_terms_of_activations[-2] = self.layers[-1].transpose() @ supervision_loss_in_terms_of_activations[-1] # Second step uses the proof that combines delta cross entropy with delta softmax. They are factors of each other by the chain rule   
-        
-        #supervision_loss_in_terms_of_activations[0] = self.layers[1].transpose() @ (  self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_activations[1] )
- 
         for layer in reversed( range(len(self.layers)-2) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
             supervision_loss_in_terms_of_activations[layer] = self.layers[layer+1].transpose() @ ( self.hidden_activation_primed(self.flows[layer+2]) * supervision_loss_in_terms_of_activations[layer+1] ) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
         
-        
-        
-        # TODO Do all by hand. comment out the loops
-        #   Loss in terms of a layers weights. Think of this as    loss in terms of flows for the layer times its input and output. out_transpose * delta @ in_transpose
+        #   Loss in terms of a layers weights. Think of this as loss in terms of activations for the layer times its input and output. out_transpose * delta @ in_transpose
         supervision_loss_in_terms_of_weights = [None]*len(self.layers) # Each index is its respective layers partials
         supervision_loss_in_terms_of_weights[0] = (self.hidden_activation_primed(self.flows[1]) * supervision_loss_in_terms_of_activations[0]) @ self.flows[0].transpose() #  First layer is not inductive because the input is not activated. its the data set
-
-
-        for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[1:-1]):  
+        for layer, supervision_loss_in_terms_of_activation in enumerate(supervision_loss_in_terms_of_activations[1:-1]):  
             layer += 1 #    First layer skipped
-            supervision_loss_in_terms_of_weights[layer] = (self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]) @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers
-        #supervision_loss_in_terms_of_weights[1] =     (self.hidden_activation_primed(self.flows[2]) * supervision_loss_in_terms_of_activations[1]) @ self.hidden_activation( self.flows[1].transpose() ) 
-        
+            supervision_loss_in_terms_of_weights[layer] = (self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]) @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers    
         supervision_loss_in_terms_of_weights[-1] = supervision_loss_in_terms_of_activations[-1] @ self.hidden_activation( self.flows[-2].transpose() )  
 
         regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(dnn) # Do not normalize. This is a term of the loss
-        #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
-        total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )]
-        
+        total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )] #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
+
         supervision_loss_in_terms_of_biases = [None] * len(self.layers)
         supervision_loss_in_terms_of_biases[-1] = supervision_loss_in_terms_of_activations[-1] #  Not inductive yet because of derivitive of loss and chain to derivitive of final activation 
-        #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
         for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[:-1]): #   Last layer already done
-            supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]
-   
+            supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer] #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
+        
         #   We can now normalize the full gradients in place in terms of each layer.  
         if normalize: normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
 
-        if normalize: # Warning: If you place this before loss in terms of flows is used it will break because it changes the input in place
-            normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) 
-        #   Todo examin bias magnitudes and consider adding bias magnitude to regulizer:
-
+        if normalize: normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of flows is used it will break because it changes the input in place
+        
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
     def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
@@ -645,8 +633,8 @@ class MNIST:
 
 data = MNIST()
 
-neurons_per_layer = [1000, 100] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.0, .0] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [1000, 500, 250] # First layers neuron count. Second layer defined implicitly
+drop_out_per_layer = [0.0, 0.0, 0.0] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
