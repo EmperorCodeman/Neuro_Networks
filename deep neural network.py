@@ -97,9 +97,10 @@ class ACTIVATIONS:
         return dendritic_input
 
 class LOSS_FUNCTIONS:
-    accuracy_importance = 1 # [0,1] This may not working properly because induction method differentiates loss in terms of z not activated z
-    normality_importance = 1 - accuracy_importance
-    regulizer_exponential = 12 # Must be even so no negatives
+    accuracy_importance = .9 # [0,1] This may not working properly because induction method differentiates loss in terms of z not activated z
+    normality_importance = 1 - accuracy_importance #    This scales the importace of the regulizer
+    regulizer_exponential = 12 # Must be even so no negatives 
+    regulizer_threshold = 2 #   This prevents the regulizer from punishing nominal weights. Only add punishment if the weights magnitude exceeds the threshold
 
     @staticmethod
     def mean_squared_error(dnn, batch, supervision):
@@ -122,29 +123,32 @@ class LOSS_FUNCTIONS:
 
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
-        #   When I did the gradient I got the below. 
-        #coeff = -supervision * supervision.shape[1]
-        #return coeff / dnn.feed_forward(batch) 
-       
+        #   WARNING: This is the prime of the superivison loss only. The full loss requires other terms primes like regulizer
         #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z 
-        #   The gradient of the weights use the regularizer primed. See backpropagation theory for understanding
-        #   Universal Proved gradient
-        #   This is partial of loss in terms of final z. Final z not final s. s is activated
         return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.feed_forward(batch) - supervision)  
 
     @staticmethod
     def regularize_weights(dnn):
-        #   Punish large weights or e^x will reach infinity. Average weight squared as punishment 
+        #   Punish large weights or e^x will reach infinity ie outside data structure bounds. Average weight squared as punishment 
         punishment = 0
-        for layer in dnn.layers:
-            punishment += np.sum(layer**LOSS_FUNCTIONS.regulizer_exponential)
+        for layer in dnn.layers: #  This function is called many times with line search where as the primes are called only once per iteraction 
+            weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold
+            punishment += np.sum(layer[weights_too_large]**LOSS_FUNCTIONS.regulizer_exponential)
         return punishment / dnn.network_size
 
     @staticmethod
     def regularize_weights_primed(dnn):
         #   This is the rate of change of the regulizer term in terms of the weights. Not final z. Seperate from backprogation 
-        return [ (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size) * (layer**(LOSS_FUNCTIONS.regulizer_exponential-1)) for layer in dnn.layers ]
-
+        gradients = [] 
+        for layer in dnn.layers:
+            gradient = np.zeros_like(layer)
+            weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold
+            gradient[weights_too_large] = layer[weights_too_large]
+            coeff = (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size)
+            gradient[weights_too_large] = coeff * (gradient[weights_too_large]**(LOSS_FUNCTIONS.regulizer_exponential-1))
+            gradients.append( gradient )  
+        
+        return gradients 
 
 class DNN:
     def __init__(self, neurons_per_layer, drop_out_per_layer, data, \
@@ -652,9 +656,9 @@ dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
 dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
-#dnn.fit(batch_size=6,  epochs_limit=1, algorithm=step_algorithm)
-#dnn.fit(batch_size=12, epochs_limit=1, algorithm=step_algorithm)
-#dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=6,  epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=12, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Home stretch 
@@ -678,12 +682,6 @@ dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
 
 
 """
-# start_time = datetime.now()
-# end_time = datetime.now()
-# print('Duration: {}'.format(end_time - start_time))
-
-
-
 
 
 """
