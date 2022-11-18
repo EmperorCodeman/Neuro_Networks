@@ -69,15 +69,10 @@ class ACTIVATIONS:
 
     @staticmethod
     def softmax(dendritic_input):
+        #   The first pass should have the output be around 1/lables for all probablities. Because nothing is known this is expectation. Its a stable numerical start. This is naturally achieved with random uniform numbers 
         
-        # def normalize_tensor(tensor):
-        #     #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
-        #     return (tensor - np.average(tensor)) / np.std(tensor) / tensor.shape[0]
-
-        # dendritic_input = normalize_tensor(dendritic_input)
-
-        #   The first pass should have the output be around 1/lables for all probablities. Because nothing is known this is expectation. Its a stable numerical start
-        #   This is achieved if you init weights[-1,1] / by respective layers number of neurons
+        #   proof of equality https://blester125.com/blog/softmax.html The below line increases numerical stability without changing the value. Fascinating and simple proof. To repeat. this manipulation has not effect on the output. They are equal. Only numerical stability and cost of calculation is added
+        dendritic_input -= dendritic_input.max(axis=0) #  out is [0, -inf] This insures that the denominator of softmax never equals 0. 
         e_to_x = np.exp(dendritic_input)
         e_to_x = e_to_x / np.sum(e_to_x, axis=0)
         return e_to_x # todo move return up so no rewrite to e to x in memory optimizationS
@@ -628,14 +623,14 @@ class MNIST:
         #self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
 
         #   Use this for quick load with debug
-        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
-        self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
-        self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
+        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+        # self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
+        # self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
         
         #   Full train and sufficient test
-        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
-        # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
-        # self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
+        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+        self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+        self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
         
 
     @staticmethod
@@ -664,12 +659,11 @@ dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
     Home stretch 
         lower learning rate with accuracy 
             decrease the bounds of the step as test accuracy increases
+            consider removing bounds. with drop out and regulizer so stable. parabalic functionality might remove need. also we reset each time now
     
         train on labels to images then print 
             draw numbers and parse them for classification
             feed generator to classifierer and test accur 
-        
-        have condition if regulizer is too below threshold cancel it
         
         drop out not debuged for extra layers 
         Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
