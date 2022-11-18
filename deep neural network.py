@@ -1,6 +1,8 @@
-import numpy as np
-from PIL import Image
-
+import numpy as np_ #   Numpy uses the CPU. Its slower, but the library appears more stable, and better exception handeling 
+from PIL import Image # Used to debug images. Optional 
+import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occures making tracing harder then Numpy
+import time #   Used to time program speed. Optional 
+                
 """
     Realizations:
         If the input does not have geometric meaning. Ie if the positions of cells has no meaning then input should be 1D. 
@@ -116,7 +118,7 @@ class LOSS_FUNCTIONS:
         supervision = supervision == 1
         accuracy_loss = (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * np.sum(-np.log(dnn.feed_forward(batch)[supervision])) 
         normality_loss = LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn)
-        return accuracy_loss + normality_loss
+        return float(accuracy_loss) + float(normality_loss)
 
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
@@ -124,7 +126,7 @@ class LOSS_FUNCTIONS:
         #coeff = -supervision * supervision.shape[1]
         #return coeff / dnn.feed_forward(batch) 
        
-        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation
+        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z 
         #   The gradient of the weights use the regularizer primed. See backpropagation theory for understanding
         #   Universal Proved gradient
         #   This is partial of loss in terms of final z. Final z not final s. s is activated
@@ -205,7 +207,7 @@ class DNN:
         self.flows = [None] * (len(layers)+1)
 
         #   Store number of weights of network
-        self.network_size = np.sum([layer.size for layer in layers])
+        self.network_size = np.sum(np.array([layer.size for layer in layers]))
 
         #   create biases
         self.biases = initialize_biases(layers)
@@ -355,9 +357,8 @@ class DNN:
                 To solve we have 2 equations with two unknowns for polynomial form, because C is always 0 due to 0 step causing 0 delta loss ie 0 y intercept  
                     The first point is always (0,0) thus C the y intercept is always 0 in this case
                 We set the system, invert it then matrix multiply to get a and b. Then use algebra to solve for the vertex
-            """
-            """
-                #   This is the linear algebra process to obtain the vertex
+            
+                This is the linear algebra process to obtain the vertex
                 system_of_equations = np.array([\
                     [three_input[1]**2, three_input[1]],\
                     [three_input[2]**2, three_input[2]]
@@ -414,7 +415,7 @@ class DNN:
             #   We now know that the delta loss is negative. Lets optimize the step size further with parabula then finalize step
             parabala_points_x = [0, last_step,   last_step*1.5] 
             upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
-            parabala_points_y = [0, d_loss, upstep_delta_loss]
+            parabala_points_y = [0, d_loss, upstep_delta_loss] 
             parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
 
             #   Parabalas need three non linear points. X points will always be different
@@ -430,7 +431,7 @@ class DNN:
                     parabala_points_x.append(parabala_step)
                     parabala_points_y.append(delta_loss_parabala)
                     parabala_points_loss.append(parabala_loss)
-                best_step_index = np.argmin(parabala_points_y)
+                best_step_index = np_.array([parabala_points_y]).argmin()
 
             if parabala_points_x[best_step_index] == 0: 
                 raise Exception("Only negative delta loss should be at this point. Logic bad rewrite")
@@ -453,9 +454,9 @@ class DNN:
                     normalize_gradients_ = " using Normalized Gradients"
                 else: 
                     normalize_gradients_ = " not using Normalized Gradients"
-                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_)
-                print("\n\t\t\t\t\t\tNeurons per Layer: " + str(neurons_per_layer) + "\t\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(drop_out_per_layer) + \
-                    "\t\t\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
+                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_)
+                print("\n\t\t\t\tNeurons per Layer: " + str(neurons_per_layer) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(drop_out_per_layer) + \
+                    "\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
             elif message_type == "epoch":
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
             elif message_type == "progress":
@@ -467,7 +468,9 @@ class DNN:
             elif "final":
                 print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
                 read_out("progress")
-                print("\n\n\n")
+                total_time = (time.time() - start_time) / 60
+                print("\nTotal Execution Time: " + f'{total_time:.2E}' + " Minutes")
+
             else: raise Exception("No message of type")
 
         def perform_drop_out():
@@ -520,7 +523,8 @@ class DNN:
                 self.layers[layer] *= drop_out_per_layer[layer]
                 self.biases[layer] *= drop_out_per_layer[layer]
 
-        test_sample_size = 300
+        start_time = time.time()        
+        test_sample_size = 400
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
@@ -581,7 +585,7 @@ class DNN:
 
                 
         #   Undo Dropout and Print out final results of fit call
-        undo_drop_out()     
+        #undo_drop_out()     
         read_out("final")           
 
 class MNIST:
@@ -618,10 +622,18 @@ class MNIST:
 
         #self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
         #self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+
+        #   Use this for quick load with debug
         self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
         self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
         self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
         
+        #   Full train and sufficient test
+        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+        # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+        # self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
+        
+
     @staticmethod
     def show_image_from_row(data, row):
         image = data[row,1:].reshape(28,28) #   Skip label
@@ -633,33 +645,42 @@ class MNIST:
 
 data = MNIST()
 
-neurons_per_layer = [1000, 500, 250] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.0, 0.0, 0.0] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [1000, 500, 100] # First layers neuron count. Second layer defined implicitly
+drop_out_per_layer = [0.0, .0, 0.] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
-dnn.fit(batch_size=11, epochs_limit=2, algorithm=step_algorithm)
-dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
+#dnn.fit(batch_size=6,  epochs_limit=1, algorithm=step_algorithm)
+#dnn.fit(batch_size=12, epochs_limit=1, algorithm=step_algorithm)
+#dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Home stretch 
-        any amount of layers
         lower learning rate with accuracy 
+            decrease the bounds of the step as test accuracy increases
+    
         train on labels to images then print 
-        draw numbers and parse them for classification
-        feed generator to classifierer and test accur 
-        Done
+            draw numbers and parse them for classification
+            feed generator to classifierer and test accur 
+        
+        have condition if regulizer is too below threshold cancel it
+        
+        drop out not debuged for extra layers 
+        Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
+            Ensure that step reduces delta loss with bias also before step
+        
+        Use the saved flows for loss primed calculation for optimization no need to feed forward unless weights changed
+        Change relu to argmax for optimization
+
+    DONE
+
+
 """
-
-#   TODO review gradient proofs add their link and trace to make sure gradient is being done right. You never got any hidden layers to train
-#   use cupy
-#   decrease the bounds of the step as test accuracy increases
-#   Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
-#   Use the saved flows for loss primed calculation for optimization no need to feed forward unless weights changed
-#   Change relu to argmax for optimization
-
-
+# start_time = datetime.now()
+# end_time = datetime.now()
+# print('Duration: {}'.format(end_time - start_time))
 
 
 
