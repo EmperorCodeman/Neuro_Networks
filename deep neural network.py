@@ -480,7 +480,7 @@ class DNN:
                 for layer in self.all_neuron_indicies:
                     np.random.shuffle(layer)
 
-            #randomize_drop_out()
+            randomize_drop_out()
 
             #   The dropped values are stored in the buffer already from the last iteration: For reversion post iteration
             layers_kept_rows = np.sort( self.all_neuron_indicies[0][:self.number_of_neurons_to_keep[0]] )
@@ -513,17 +513,38 @@ class DNN:
             self.buffered_biases[0][self.kept_weights[0]] = self.biases[0]
 
             for layer in range(1, len(self.layers)-1):
-                self.buffered_layers[layer][self.kept_weights[layer][0]][:, self.kept_weights[layer][1]] = self.layers[layer]
+                # self.buffered_layers[layer][self.kept_weights[layer][0]][:, self.kept_weights[layer][1]] = self.layers[layer]
+                #   This is a dirty way of doing the above. The above wont work because it returns a copy due fancy indexing
+                rows = np.full(self.buffered_layers[layer].shape, False, dtype=bool)
+                columns = np.full(self.buffered_layers[layer].shape, False, dtype=bool)
+                rows[self.kept_weights[layer][0]] = True
+                columns[:, self.kept_weights[layer][1]] = True
+                rows_and_columns = rows * columns
+                self.buffered_layers[layer][rows_and_columns] = self.layers[layer].flatten()
                 self.buffered_biases[layer][self.kept_weights[layer][0]] = self.biases[layer]
                
             self.buffered_layers[-1][:, self.kept_weights[-1]] = self.layers[-1]
                         
         def undo_drop_out():
-            self.layers = self.buffered_layers
-            self.biases = self.buffered_biases
+            #   Add all dropped out layers back
+            self.layers = list.copy( self.buffered_layers )
+            self.biases = list.copy( self.buffered_biases )
+            
+            #   Scale weights to so additional layers dont increase magnitude to activation 
             for layer in range(len(self.layers) - 1):
-                self.layers[layer] *= drop_out_per_layer[layer]
-                self.biases[layer] *= drop_out_per_layer[layer]
+                restore_total_weight = 1 - drop_out_per_layer[layer]
+                self.layers[layer] *= restore_total_weight
+                self.biases[layer] *= restore_total_weight
+            
+            #   Log full nets performance and fitting time
+            read_out("final")       
+
+            #   Revert to previous state for potential future training 
+            for layer in range(len(self.layers) - 1):
+                restore_total_weight = 1 - drop_out_per_layer[layer]
+                self.layers[layer] /= restore_total_weight
+                self.biases[layer] /= restore_total_weight
+
 
         test_sample_size = 400
         test_batch = self.data.test_data[:, 0:test_sample_size]
@@ -562,7 +583,7 @@ class DNN:
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
 
                 #   Drop out neurons randomely to train noise tolerance 
-                #perform_drop_out()
+                perform_drop_out()
 
                 #   Update gradient in terms of weights and biases for new iteration's batch
                 layers_gradients, bias_gradients = self.get_gradient(batch, batch_supervision, normalize=normalize_gradients) 
@@ -578,15 +599,14 @@ class DNN:
                     self.biases[layer] -= step_size_biases * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
 
                 #   Update the bufferes with the new trained weights
-                #update_buffers()
+                update_buffers()
 
                 #   Progress Readout
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
                     read_out("progress")
 
-        #   Undo Dropout and Print out final results of fit call
-        undo_drop_out()     
-        read_out("final")           
+        #   Undo Dropout and Print out final results of fits call, then revert
+        undo_drop_out()        
 
 class MNIST:
     def __init__(self) -> None:
@@ -649,7 +669,7 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [1000, 100] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.0, .0] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+drop_out_per_layer = [0.1, .1] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
