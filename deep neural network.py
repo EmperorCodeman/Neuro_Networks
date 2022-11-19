@@ -124,10 +124,10 @@ class LOSS_FUNCTIONS:
 
     @staticmethod
     def regularize_weights(dnn):
-        #   Punish large weights or e^x will reach infinity ie outside data structure bounds. Average weight squared as punishment 
+        #   Punish large weights as theory indicates large weights are indicitive of overfitting. In addition we use drop out to regularize
         punishment = 0
         for layer in dnn.layers: #  This function is called many times with line search where as the primes are called only once per iteraction 
-            weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold
+            weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold #   If we punish nominal weights then that will add noise to our gradient. Only punish if over threshold
             punishment += np.sum(layer[weights_too_large]**LOSS_FUNCTIONS.regulizer_exponential)
         return punishment / dnn.network_size
 
@@ -440,6 +440,7 @@ class DNN:
             last_step = best_known_step
             #last_loss = parabala_points_loss[best_step_index]
             #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
+            self.layers = buffered_network
             return last_step, .0001*last_step
             
         def static_steps():
@@ -479,10 +480,10 @@ class DNN:
                 for layer in self.all_neuron_indicies:
                     np.random.shuffle(layer)
 
-            randomize_drop_out()
+            #randomize_drop_out()
 
             #   The dropped values are stored in the buffer already from the last iteration: For reversion post iteration
-            layers_kept_rows = self.all_neuron_indicies[0][:self.number_of_neurons_to_keep[0]]
+            layers_kept_rows = np.sort( self.all_neuron_indicies[0][:self.number_of_neurons_to_keep[0]] )
             kept_weights = [ layers_kept_rows ]
             #   Drop out neurons. ie rows only because its first layer
             self.layers[0] = self.buffered_layers[0][layers_kept_rows]
@@ -490,15 +491,17 @@ class DNN:
             
             #   Dropout for hidden layers has rows and columns from previous layer from matrix multiplication
             for layer, number_of_neurons_to_keep in enumerate(self.number_of_neurons_to_keep[1:]): 
-                layers_kept_rows = self.all_neuron_indicies[layer+1][:number_of_neurons_to_keep]
-                layers_kept_columns = self.all_neuron_indicies[layer][:self.number_of_neurons_to_keep[layer]]  
+                layers_kept_rows = np.sort( self.all_neuron_indicies[layer+1][:number_of_neurons_to_keep] )
+                layers_kept_columns = np.sort( self.all_neuron_indicies[layer][:self.number_of_neurons_to_keep[layer]] )  
+                #layers_kept_columns = kept_weights[layer][0]  
+                
                 kept_weights.append( [ layers_kept_rows, layers_kept_columns] )
                 self.layers[layer+1] = self.buffered_layers[layer+1][ layers_kept_rows ][ :, layers_kept_columns ]
                 self.biases[layer+1] = self.buffered_biases[layer+1][ layers_kept_rows ]
                 
 
             #   Final layer only drops out columns due to previous layers rows being dropped 
-            layers_kept_columns = self.all_neuron_indicies[-1][:self.number_of_neurons_to_keep[-1]]
+            layers_kept_columns = np.sort( self.all_neuron_indicies[-1][:self.number_of_neurons_to_keep[-1]] )
             kept_weights.append( layers_kept_columns )
             self.layers[-1] = self.buffered_layers[-1][:, layers_kept_columns]
             self.kept_weights = kept_weights
@@ -522,7 +525,6 @@ class DNN:
                 self.layers[layer] *= drop_out_per_layer[layer]
                 self.biases[layer] *= drop_out_per_layer[layer]
 
-        start_time = time.time()        
         test_sample_size = 400
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
@@ -582,9 +584,8 @@ class DNN:
                 if (i % probability_of_printing_readout_per_iter) == 0:                  
                     read_out("progress")
 
-                
         #   Undo Dropout and Print out final results of fit call
-        #undo_drop_out()     
+        undo_drop_out()     
         read_out("final")           
 
 class MNIST:
@@ -619,18 +620,21 @@ class MNIST:
             
             return data, supervision
 
+        #   Uncomment each section for effect. 
+
+        #   Full train Full test. not recommended
         #self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
         #self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
 
-        #   Use this for quick load with debug
-        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
-        # self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
-        # self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
+        #   Use this for quick load for development
+        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+        self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
+        self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
         
-        #   Full train and sufficient test
-        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
-        self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
-        self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
+        #   Full train and sufficient test. Recommended 
+        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+        # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+        # self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
         
 
     @staticmethod
@@ -644,23 +648,25 @@ class MNIST:
 
 data = MNIST()
 
-neurons_per_layer = [1000, 500, 100] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.0, .0, 0.] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [1000, 100] # First layers neuron count. Second layer defined implicitly
+drop_out_per_layer = [0.0, .0] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
+start_time = time.time() #  Global start time will allow global access
 dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=6,  epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=12, epochs_limit=1, algorithm=step_algorithm)
 dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Home stretch 
         lower learning rate with accuracy 
             decrease the bounds of the step as test accuracy increases
             consider removing bounds. with drop out and regulizer so stable. parabalic functionality might remove need. also we reset each time now
-    
+                scale bounds by batch size perhapes. Low batch size will lead to no where wiht large step
+
         train on labels to images then print 
             draw numbers and parse them for classification
             feed generator to classifierer and test accur 
