@@ -49,8 +49,12 @@ import time #   Used to time program speed. Optional
 
     Neuro nets profit from outliers, unlike stats. We the brain learn better from outliers and so do they  
 
-    TODO Use induction to differentiate any dnn
-    Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize 
+    If the training loss goes to zero and the testing loss is above zero then increase batch size. As batch size goes to infinity it converges with the testing loss
+    You should always be able to fit to training perfectly no matter batch size or your nets wrong. 
+    From no training loss you need to increase the size of the data set, as well as mini batch size.
+    As training set size goes to infinity, if training loss is zero, then the descrepency between training loss and testing loss will go to zero
+     
+    GPU with cupy speed up program 19x fold
 """
 
 class ACTIVATIONS:
@@ -267,17 +271,29 @@ class DNN:
 
     def get_gradient(self, batch, supervision, normalize=True):
         
-        def normalize_tensors(tensors, biases=False):
-            for i, t in enumerate(tensors):
-                    if biases:
-                        tensor_magnitude = np.sum(t**2, axis=0)**.5
-                        tensor_magnitude[tensor_magnitude==0] = 1 # Prevent division by 0
-                        tensors[i] = t / tensor_magnitude #   Normalize
-                    else:    
-                        tensor_magnitude = np.sum(t**2)**.5
-                        if tensor_magnitude == 0: continue
-                        tensors[i] = t / tensor_magnitude #   Normalize
-            return tensors
+        def normalize_tensors(tensors, biases=False, inter_layer_adjustments=None):
+            #   We curve and normalize all layers gradients. After this we will be able to uniformly find the step size for all gradients. Where each layer and each weights magnitudes are already scaled differently from this function. Including bias
+            if biases:
+                for i, t in enumerate(tensors): 
+                    t = np.average(t, axis=1)[:, np.newaxis]
+                    tensor_magnitude = np.sum(t**2)**.5 * self.layers[i].shape[1] #  We first normalize by batch member, then we divide the bias gradient by the number of terms in its respective neuron, which is why we multiply the denominator
+                    if tensor_magnitude == 0: tensor_magnitude = 1 # Prevent division by 0
+                    #tensors[i] = (inter_layer_adjustments[i] / tensor_magnitude) * t
+                    tensors[i] = t / tensor_magnitude
+                       
+            else:    
+                magnitudes = np.array( [0] * len(tensors) )
+                inter_layer_power = 2 # We curve the layers so the layers with higher gradients have less magnitude and vice versa. This way all layers update closer to uniform
+                for i, t in enumerate(tensors):
+                    tensor_magnitude = np.sum(t**2)**.5
+                    magnitudes[i] = tensor_magnitude 
+                    if tensor_magnitude == 0: continue
+                    tensors[i] = t / tensor_magnitude #   Normalize
+                # curved_tensor_magnitudes = magnitudes ** inter_layer_power
+                # inter_layer_adjustments = 1 - (curved_tensor_magnitudes / np.sum(curved_tensor_magnitudes)) #   The last layers have more magnitude, thus we must scale their gradients down because they are more sensitive to change, and vice versa. Curve effect with exponet  
+                # inter_layer_and_normalization = inter_layer_adjustments / magnitudes
+                # tensors = [layer * inter_layer_and_normalization[i] for i, layer in enumerate(tensors) ]
+                # return inter_layer_adjustments 
 
         """
             The idea of backpropagation is that a networks loss from the perspective of a layer is not affected by previous layers. Because a net feeds forward
@@ -333,11 +349,13 @@ class DNN:
         for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[:-1]): #   Last layer already done
             supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer] #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
         
-        #   We can now normalize the full gradients in place in terms of each layer.  
-        if normalize: normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
+        if normalize: #   We can now normalize the full gradients in place in terms of each layer.   
+            normalize_tensors(total_loss_in_terms_of_weights)
+            # inter_layer_adjustment = normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
+            #normalize_tensors(supervision_loss_in_terms_of_biases, biases=True, inter_layer_adjustments=inter_layer_adjustment) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
+            normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
 
-        if normalize: normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of flows is used it will break because it changes the input in place
-        
+
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
     def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
@@ -441,7 +459,7 @@ class DNN:
             #last_loss = parabala_points_loss[best_step_index]
             #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
             self.layers = buffered_network
-            return last_step, .0001*last_step
+            return last_step, last_step#.0001*last_step
             
         def static_steps():
             #    Step a portion of the normal gradient. Note. In a uniform dist, the scale of elements is changed by 1/size. Thus you might vanish. 
@@ -464,7 +482,7 @@ class DNN:
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
                 print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
-                    + "\t Training Accuracy: " + str(train_accuracy) + "\t Testing Accuracy: " + str(test_accuracy))
+                    + "\t Training Accuracy: " + str(train_accuracy) + "\t\t Testing Accuracy: " + str(test_accuracy))
             elif "final":
                 print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
                 read_out("progress")
@@ -546,10 +564,10 @@ class DNN:
                 self.biases[layer] /= restore_total_weight
 
 
-        test_sample_size = 400
-        test_batch = self.data.test_data[:, 0:test_sample_size]
-        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        probability_of_printing_readout_per_iter = 100 # 1 in 100 chance of print out
+        #test_sample_size = 400
+        test_batch = self.data.test_data #  self.data.test_data[:, 0:test_sample_size]
+        test_batch_supervision = self.data.test_supervision #   self.data.test_supervision[:, 0:test_sample_size]
+        probability_of_printing_readout_per_iter = 100 # 1 in 1000 chance of print out
         normalize_gradients = True
 
         #   Parabolic function vars
@@ -591,12 +609,13 @@ class DNN:
                 #   Find step size for bias and weights
                 step_size_weights, step_size_biases = algorithm()
                 if step_size_weights == 0: 
+                    Warning("Check for zeroed out gradients. Feed forward never zeros because of bias")
                     continue # Indicates wonky behavior
 
                 #   Perform Mini Batch Gradient Descent
                 for layer in range(len(layers_gradients)):
                     self.layers[layer] -= step_size_weights * layers_gradients[layer]
-                    self.biases[layer] -= step_size_biases * np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
+                    self.biases[layer] -= step_size_biases *  bias_gradients[layer]#np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
 
                 #   Update the bufferes with the new trained weights
                 update_buffers()
@@ -654,7 +673,7 @@ class MNIST:
         #   Full train and sufficient test. Recommended 
         # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
         # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
-        # self.test_data, self.test_supervision = self.test_data[:,:500], self.test_supervision[:,:500] 
+        # self.test_data, self.test_supervision = self.test_data[:,:5000], self.test_supervision[:,:5000] 
         
 
     @staticmethod
@@ -668,21 +687,31 @@ class MNIST:
 
 data = MNIST()
 
-neurons_per_layer = [1000, 100] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.1, .1] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [1000, 250, 50] # First layers neuron count. Second layer defined implicitly
+drop_out_per_layer = [0.2, .3, 0.1] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
 start_time = time.time() #  Global start time will allow global access
-dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=3,  epochs_limit=2, algorithm=step_algorithm)
+dnn.fit(batch_size=32, epochs_limit=2, algorithm=step_algorithm)
+dnn.fit(batch_size=128, epochs_limit=2, algorithm=step_algorithm)
 dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Home stretch 
+
+        CHECK WHY BUFFERED net in line seach is working. no copy used 
+        start with step search on weights grad
+            then recurse to bias step search. Think of it as a slice where step size with weights is no constant
+                
+        progress from last iteration to scale upper bound of parabala
+        Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
+            Ensure that step reduces delta loss with bias also before step
+        
         lower learning rate with accuracy 
+            The parabala is working. Scale bounds as in notebook
             decrease the bounds of the step as test accuracy increases
             consider removing bounds. with drop out and regulizer so stable. parabalic functionality might remove need. also we reset each time now
                 scale bounds by batch size perhapes. Low batch size will lead to no where wiht large step
@@ -691,12 +720,11 @@ dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
             draw numbers and parse them for classification
             feed generator to classifierer and test accur 
         
-        drop out not debuged for extra layers 
-        Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
-            Ensure that step reduces delta loss with bias also before step
-        
         Use the saved flows for loss primed calculation for optimization no need to feed forward unless weights changed
         Change relu to argmax for optimization
+
+        numerical gradients 
+            https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
 
     DONE
 
@@ -706,6 +734,8 @@ dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Optimization. Use memory in dnn and access it so no need to recall. self.flows not used enough 
+
+    Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize
 
     Mini lecture:
         Explain bias and how his solution created no need to change anything with bias
