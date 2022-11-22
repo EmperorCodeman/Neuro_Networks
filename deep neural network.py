@@ -375,7 +375,10 @@ class DNN:
             #   Only a temp update of the layer
             self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
             self.biases = [buffered_biases[i]  - step_magnitude*layers_gradient for i, layers_gradient in enumerate(bias_gradients)]
-            perspective_loss = self.get_loss(self, batch, batch_supervision)
+            if use_semi_test:
+                perspective_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision)                
+            else: 
+                perspective_loss = self.get_loss(self, batch, batch_supervision)
             delta_loss = perspective_loss - last_loss #  Note: The loss is always positive. Thus delta loss is [0,original_loss]
             return delta_loss, perspective_loss
 
@@ -493,6 +496,9 @@ class DNN:
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
             elif message_type == "progress":
                 loss = self.get_loss(self, batch, batch_supervision)
+                if loss < 0.01: 
+                    nonlocal use_semi_test
+                    use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
                 print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
@@ -578,11 +584,14 @@ class DNN:
                 self.biases[layer] /= restore_total_weight
 
 
-        #test_sample_size = 400
-        test_batch = self.data.test_data #  self.data.test_data[:, 0:test_sample_size]
-        test_batch_supervision = self.data.test_supervision #   self.data.test_supervision[:, 0:test_sample_size]
+        test_sample_size = 500
+        test_batch = self.data.test_data[:, 0:test_sample_size]
+        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
+        semi_test_batches = self.data.test_data[:, test_sample_size:]
+        semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
         probability_of_printing_readout_per_iter = 100 # 1 in 1000 chance of print out
         normalize_gradients = True
+        use_semi_test = False
 
         #   Parabolic function vars
         step_reset = .6 #    Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
@@ -595,6 +604,7 @@ class DNN:
         read_out("init")
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
+            use_semi_test = False
             read_out("epoch") 
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
@@ -611,8 +621,13 @@ class DNN:
                
                 #   Update batch for current iteration
                 inter_epoch_iteration += 1     
+                #   We build the gradient from the training data
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
+                #   I probe potential steps of the gradient to add to the net with a partition of the testing data. This insures steps always generalize to unseen data and are not overfitting the net to training data 
+                semi_batch_i = np.random.randint(0, semi_test_batches.shape[1]-batch_size)
+                semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i+batch_size]
+                semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i+batch_size]                
 
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
@@ -623,8 +638,8 @@ class DNN:
                 #   Find step size for bias and weights
                 step_size_weights, step_size_biases = algorithm()
                 if step_size_weights == 0: 
-                    Warning("Check for zeroed out gradients. Feed forward never zeros because of bias")
-                    continue # Indicates wonky behavior
+                    # Warning("Check for zeroed out gradients. Feed forward never zeros because of bias")
+                    continue # Network could be zerod causes no change in loss with gradient steps of any size. Or the training accuracy is already 100% before gradient step
 
                 #   Perform Mini Batch Gradient Descent
                 for layer in range(len(layers_gradients)):
@@ -701,40 +716,26 @@ class MNIST:
 
 data = MNIST()
 
-neurons_per_layer = [1000, 250, 50] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.2, .3, 0.1] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
+drop_out_per_layer = [0.4, .5, 0.2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
 
 start_time = time.time() #  Global start time will allow global access
-dnn.fit(batch_size=3,  epochs_limit=2, algorithm=step_algorithm)
-dnn.fit(batch_size=32, epochs_limit=2, algorithm=step_algorithm)
-dnn.fit(batch_size=128, epochs_limit=2, algorithm=step_algorithm)
+dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
+dnn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
 dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 
 """
     Home stretch 
-
-                
-        progress from last iteration to scale upper bound of parabala
-            
-        Ensure that step reduces delta loss with bias also before step
         
-        lower learning rate with accuracy 
-            The parabala is working. Scale bounds as in notebook
-            decrease the bounds of the step as test accuracy increases
-            consider removing bounds. with drop out and regulizer so stable. parabalic functionality might remove need. also we reset each time now
-                scale bounds by batch size perhapes. Low batch size will lead to no where wiht large step
-
         train on labels to images then print 
             draw numbers and parse them for classification
             feed generator to classifierer and test accur 
-        
-        Use the saved flows for loss primed calculation for optimization no need to feed forward unless weights changed
-        Change relu to argmax for optimization
-
-        numerical gradients 
+    
+        add numerical gradients as in video for test.  
             https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
 
     DONE
