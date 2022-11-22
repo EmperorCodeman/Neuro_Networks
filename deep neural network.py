@@ -55,6 +55,11 @@ import time #   Used to time program speed. Optional
     As training set size goes to infinity, if training loss is zero, then the descrepency between training loss and testing loss will go to zero
      
     GPU with cupy speed up program 19x fold
+
+    TODO:
+        Step different lengths for each layers weights and biases. This would create a massively complex step. Notice the last layers have more magnitude in their gradients. thus they should have smaller steps
+            To find their lengths. do mesh search... hyperdimensional line search. Find values and store them in a array. Then decay the array over iterations and use a multinomial to select the weights from there. 
+
 """
 
 class ACTIVATIONS:
@@ -277,23 +282,29 @@ class DNN:
                 for i, t in enumerate(tensors): 
                     t = np.average(t, axis=1)[:, np.newaxis]
                     tensor_magnitude = np.sum(t**2)**.5 * self.layers[i].shape[1] #  We first normalize by batch member, then we divide the bias gradient by the number of terms in its respective neuron, which is why we multiply the denominator
+                    #if tensor_magnitude == 0: tensor_magnitude = 1 # Prevent division by 0
                     if tensor_magnitude == 0: tensor_magnitude = 1 # Prevent division by 0
                     #tensors[i] = (inter_layer_adjustments[i] / tensor_magnitude) * t
                     tensors[i] = t / tensor_magnitude
+                    #tensors[i] = t
                        
             else:    
-                magnitudes = np.array( [0] * len(tensors) )
-                inter_layer_power = 2 # We curve the layers so the layers with higher gradients have less magnitude and vice versa. This way all layers update closer to uniform
+                #magnitudes = np.array( [0.0] * len(tensors) )
+                #inter_layer_power = 2 # We curve the layers so the layers with higher gradients have less magnitude and vice versa. This way all layers update closer to uniform
                 for i, t in enumerate(tensors):
                     tensor_magnitude = np.sum(t**2)**.5
-                    magnitudes[i] = tensor_magnitude 
+                    #magnitudes[i] = tensor_magnitude 
                     if tensor_magnitude == 0: continue
                     tensors[i] = t / tensor_magnitude #   Normalize
+                # return 1
+                # if np.any(magnitudes == 0): return np.ones_like(magnitudes) # This is a very bad indicator. Consider putting this condition into debuger condition. Means the gradient is zeroed with some layer. Returning 1 allows continued opperation
                 # curved_tensor_magnitudes = magnitudes ** inter_layer_power
                 # inter_layer_adjustments = 1 - (curved_tensor_magnitudes / np.sum(curved_tensor_magnitudes)) #   The last layers have more magnitude, thus we must scale their gradients down because they are more sensitive to change, and vice versa. Curve effect with exponet  
                 # inter_layer_and_normalization = inter_layer_adjustments / magnitudes
-                # tensors = [layer * inter_layer_and_normalization[i] for i, layer in enumerate(tensors) ]
+                # for i, layer in enumerate(tensors):
+                #     tensors[i] = layer * inter_layer_and_normalization[i] 
                 # return inter_layer_adjustments 
+                pass
 
         """
             The idea of backpropagation is that a networks loss from the perspective of a layer is not affected by previous layers. Because a net feeds forward
@@ -350,9 +361,9 @@ class DNN:
             supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer] #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
         
         if normalize: #   We can now normalize the full gradients in place in terms of each layer.   
-            normalize_tensors(total_loss_in_terms_of_weights)
             # inter_layer_adjustment = normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
-            #normalize_tensors(supervision_loss_in_terms_of_biases, biases=True, inter_layer_adjustments=inter_layer_adjustment) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
+            # normalize_tensors(supervision_loss_in_terms_of_biases, biases=True, inter_layer_adjustments=inter_layer_adjustment) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
+            normalize_tensors(total_loss_in_terms_of_weights)
             normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
 
 
@@ -360,9 +371,10 @@ class DNN:
 
     def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
 
-        def delta_loss(step_magnitude, last_loss, buffered_network):
+        def delta_loss(step_magnitude, last_loss, buffered_network, buffered_biases):
             #   Only a temp update of the layer
             self.layers = [buffered_network[i] - step_magnitude*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
+            self.biases = [buffered_biases[i]  - step_magnitude*layers_gradient for i, layers_gradient in enumerate(bias_gradients)]
             perspective_loss = self.get_loss(self, batch, batch_supervision)
             delta_loss = perspective_loss - last_loss #  Note: The loss is always positive. Thus delta loss is [0,original_loss]
             return delta_loss, perspective_loss
@@ -413,15 +425,16 @@ class DNN:
             last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
             last_step = step_reset
 
-            buffered_network = self.layers 
-            d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+            buffered_network = list.copy(self.layers) 
+            buffered_biases = list.copy(self.biases)
+            d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network, buffered_biases)
             loop_count = 0
             while (d_loss >= 0): #  While there is no improvement with step length, half the step and check again
                 last_step *= .5 #   Half step. Remember, tangent to 0 step is always negative delta loss. So there is always a solution
-                d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network)
+                d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network, buffered_biases)
                 loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
                 if loop_count == 30:
-                    return 0, .001 #  Futer iterations could still provide improvment but this batch is perfectly fit 
+                    return 0.0, 0.0 #  Futer iterations could still provide improvment but this batch is perfectly fit 
                     
                 if d_loss == 0:
                     if np.sum(self.feed_forward(batch)) == 0: 
@@ -431,7 +444,7 @@ class DNN:
                 
             #   We now know that the delta loss is negative. Lets optimize the step size further with parabula then finalize step
             parabala_points_x = [0, last_step,   last_step*1.5] 
-            upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network)
+            upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network, buffered_biases)
             parabala_points_y = [0, d_loss, upstep_delta_loss] 
             parabala_points_loss = [last_loss, perspective_loss, upstep_loss]
 
@@ -443,7 +456,7 @@ class DNN:
                 parabala_step = get_parabola_min(parabala_points_x, parabala_points_y)
                 #    Parabala vertex can be outside safe step size. If so dont add  
                 if parabala_step > step_bounds[0] and parabala_step <= step_bounds[1]: 
-                    delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network)
+                    delta_loss_parabala, parabala_loss = delta_loss(parabala_step, last_loss, buffered_network, buffered_biases)
                     #   Find the min of all steps, then use it as final step. This to insure that steps can only lower loss
                     parabala_points_x.append(parabala_step)
                     parabala_points_y.append(delta_loss_parabala)
@@ -459,6 +472,7 @@ class DNN:
             #last_loss = parabala_points_loss[best_step_index]
             #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
             self.layers = buffered_network
+            self.biases = buffered_biases
             return last_step, last_step#.0001*last_step
             
         def static_steps():
@@ -702,13 +716,10 @@ dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 """
     Home stretch 
 
-        CHECK WHY BUFFERED net in line seach is working. no copy used 
-        start with step search on weights grad
-            then recurse to bias step search. Think of it as a slice where step size with weights is no constant
                 
         progress from last iteration to scale upper bound of parabala
-        Add bias step optimization to line seach. Make it independent from gradient step optimization with recursive call.  
-            Ensure that step reduces delta loss with bias also before step
+            
+        Ensure that step reduces delta loss with bias also before step
         
         lower learning rate with accuracy 
             The parabala is working. Scale bounds as in notebook
