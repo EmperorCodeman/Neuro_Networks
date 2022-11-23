@@ -425,7 +425,10 @@ class DNN:
 
             """
             
-            last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
+            if use_semi_test:
+                last_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision)               
+            else:
+                last_loss = self.get_loss(self, batch, batch_supervision) #   Compaire each potential step size against loss of no step size in delta loss 
             last_step = step_reset
 
             buffered_network = list.copy(self.layers) 
@@ -589,13 +592,14 @@ class DNN:
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         semi_test_batches = self.data.test_data[:, test_sample_size:]
         semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
+        use_semi_test = False
+        semi_batch_size = 128 # Must be smaller than data. I set this as constant so it never is too large. Because the testing data is smaller than train
         probability_of_printing_readout_per_iter = 100 # 1 in 1000 chance of print out
         normalize_gradients = True
-        use_semi_test = False
-
+        
         #   Parabolic function vars
-        step_reset = .6 #    Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
-        step_bounds = (0, 1) #    Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_reset = .6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
+        step_bounds = (0, 1) #    Arbitrary value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
@@ -625,9 +629,9 @@ class DNN:
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
                 #   I probe potential steps of the gradient to add to the net with a partition of the testing data. This insures steps always generalize to unseen data and are not overfitting the net to training data 
-                semi_batch_i = np.random.randint(0, semi_test_batches.shape[1]-batch_size)
-                semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i+batch_size]
-                semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i+batch_size]                
+                semi_batch_i = np.random.randint(0, semi_test_batches.shape[1] - semi_batch_size)
+                semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i + semi_batch_size]
+                semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i + semi_batch_size]                
 
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
@@ -717,7 +721,7 @@ class MNIST:
 data = MNIST()
 
 neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.4, .5, 0.2] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+drop_out_per_layer = [0.4, .5, 0.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
 step_algorithm = "parabola"
@@ -734,6 +738,8 @@ dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
         train on labels to images then print 
             draw numbers and parse them for classification
             feed generator to classifierer and test accur 
+        
+        try on your hand writting with paint
     
         add numerical gradients as in video for test.  
             https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
