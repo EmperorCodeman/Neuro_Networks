@@ -584,9 +584,12 @@ class DNN:
             read_out("final")       
             #   If this is the best net yet then store it
             test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
-            if global_storage["best accuracy"] > test_accuracy:      
+            if test_accuracy > global_storage["best accuracy"]:      
                 global_storage["best accuracy"] = test_accuracy
+                data_temp = self.data
+                self.data = None #  We remove the data set from the storage. So that dnn can port way more lightly
                 global_storage["champ dnn"] = self
+                self.data = data_temp # Readd so dnn can continue training 
                 print("\n A Greater Champion has Emerged !!")
 
             #   Revert to previous state for potential future training 
@@ -670,7 +673,7 @@ class DNN:
         undo_drop_out()        
 
 class MNIST:
-    def __init__(self) -> None:
+    def __init__(self, debug=False) -> None:
 
         def normalize_tensor(tensor):
             #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
@@ -708,16 +711,16 @@ class MNIST:
         #self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
 
         #   Use this for quick load for development
-        self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
-        self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
-        self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
+        if debug:
+            self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+            self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
+            self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
+        else:
+            #   Full train and sufficient test. Recommended 
+            self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+            self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+            self.test_data, self.test_supervision = self.test_data[:,:1000], self.test_supervision[:,:1000] # This is to speed up operation. I only need 500 sample size for test 
         
-        #   Full train and sufficient test. Recommended 
-        # self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
-        # self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
-        # self.test_data, self.test_supervision = self.test_data[:,:5000], self.test_supervision[:,:5000] 
-        
-
     @staticmethod
     def show_image_from_row(data, row):
         image = data[row,1:].reshape(28,28) #   Skip label
@@ -731,9 +734,9 @@ global_storage = shelve.open("persistance")
 #global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all 
 champ_dnn = global_storage["champ dnn"]
 
-try_for_better_dnn = False
+try_for_better_dnn = True
 if try_for_better_dnn:
-    data = MNIST() #    Load data for supervised learning of spawns
+    data = MNIST(debug=False) #    Load data for supervised learning of spawns
     neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
     drop_out_per_layer = [0.4, .5, 0.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
@@ -743,7 +746,7 @@ if try_for_better_dnn:
     start_time = time.time() #  Global start time will allow global access
     dnn_spawn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
     dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
-    dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
+    dnn_spawn.fit(batch_size=128, epochs_limit=2, algorithm=step_algorithm)
     dnn_spawn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
 
 
