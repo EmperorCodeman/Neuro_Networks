@@ -2,7 +2,8 @@ import numpy as np_ #   Numpy uses the CPU. Its slower, but the library appears 
 from PIL import Image # Used to debug images. Optional 
 import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occures making tracing harder then Numpy
 import time #   Used to time program speed. Optional 
-                
+import shelve  
+
 """
     Realizations:
         If the input does not have geometric meaning. Ie if the positions of cells has no meaning then input should be 1D. 
@@ -352,7 +353,7 @@ class DNN:
             supervision_loss_in_terms_of_weights[layer] = (self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]) @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers    
         supervision_loss_in_terms_of_weights[-1] = supervision_loss_in_terms_of_activations[-1] @ self.hidden_activation( self.flows[-2].transpose() )  
 
-        regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(dnn) # Do not normalize. This is a term of the loss
+        regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(self) # Do not normalize. This is a term of the loss
         total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )] #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
 
         supervision_loss_in_terms_of_biases = [None] * len(self.layers)
@@ -501,7 +502,9 @@ class DNN:
                 loss = self.get_loss(self, batch, batch_supervision)
                 if loss < 0.01: 
                     nonlocal use_semi_test
-                    use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
+                    if not use_semi_test:
+                        use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
+                        print("\n\nUsing Semi test now\n")
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
                 print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
@@ -579,6 +582,12 @@ class DNN:
             
             #   Log full nets performance and fitting time
             read_out("final")       
+            #   If this is the best net yet then store it
+            test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
+            if global_storage["best accuracy"] > test_accuracy:      
+                global_storage["best accuracy"] = test_accuracy
+                global_storage["champ dnn"] = self
+                print("\n A Greater Champion has Emerged !!")
 
             #   Revert to previous state for potential future training 
             for layer in range(len(self.layers) - 1):
@@ -718,19 +727,25 @@ class MNIST:
         #Image.fromarray(image, 'RGB').save("temp/random.jpg")
         print("\nLable for image: " + str(data[row,0]))
 
-data = MNIST()
+global_storage = shelve.open("persistance") 
+#global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all 
+champ_dnn = global_storage["champ dnn"]
 
-neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
-drop_out_per_layer = [0.4, .5, 0.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+try_for_better_dnn = False
+if try_for_better_dnn:
+    data = MNIST() #    Load data for supervised learning of spawns
+    neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
+    drop_out_per_layer = [0.4, .5, 0.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
-dnn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
-step_algorithm = "parabola"
+    dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
+    step_algorithm = "parabola"
 
-start_time = time.time() #  Global start time will allow global access
-dnn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
-dnn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
+    start_time = time.time() #  Global start time will allow global access
+    dnn_spawn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
+    dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
+    dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm)
+    dnn_spawn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
+
 
 """
     Home stretch 
