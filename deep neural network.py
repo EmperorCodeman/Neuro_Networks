@@ -1,8 +1,10 @@
 import numpy as np_ #   Numpy uses the CPU. Its slower, but the library appears more stable, and better exception handeling 
-from PIL import Image # Used to debug images. Optional 
+from PIL import Image, ImageOps # Used to debug images. Optional 
 import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occures making tracing harder then Numpy
 import time #   Used to time program speed. Optional 
 import shelve  
+import os
+import copy
 
 """
     Realizations:
@@ -583,14 +585,19 @@ class DNN:
             #   Log full nets performance and fitting time
             read_out("final")       
             #   If this is the best net yet then store it
-            test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
-            if test_accuracy > global_storage["best accuracy"]:      
-                global_storage["best accuracy"] = test_accuracy
-                data_temp = self.data
-                self.data = None #  We remove the data set from the storage. So that dnn can port way more lightly
-                global_storage["champ dnn"] = self
-                self.data = data_temp # Readd so dnn can continue training 
-                print("\n A Greater Champion has Emerged !!")
+            with shelve.open("persistance") as global_storage: #    This will sync storage and close connection at end
+                test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
+                if test_accuracy > global_storage["best accuracy"]:      
+                    improvement_percentage = (1 - test_accuracy/global_storage["best accuracy"])*100
+                    global_storage["best accuracy"] = test_accuracy
+                    data_temp = copy.deepcopy( self.data )
+                    self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
+                    self.data.test_supervision, self.data.train_supervision = None, None 
+                    
+                    global_storage["champ dnn"] = self
+                    self.data = data_temp # Ready up, so dnn can continue training 
+                    print("\n A Greater Champion has Emerged !!" + "\n" + str(improvement_percentage) + "% Improvment")
+                    #global_storage.sync()
 
             #   Revert to previous state for potential future training 
             for layer in range(len(self.layers) - 1):
@@ -606,7 +613,7 @@ class DNN:
         semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
         use_semi_test = False
         semi_batch_size = 128 # Must be smaller than data. I set this as constant so it never is too large. Because the testing data is smaller than train
-        probability_of_printing_readout_per_iter = 100 # 1 in 1000 chance of print out
+        probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out
         normalize_gradients = True
         
         #   Parabolic function vars
@@ -620,7 +627,11 @@ class DNN:
         read_out("init")
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
-            use_semi_test = False
+            if batch_size < 1000: # Once you are past 1000 size batch size. Only change weights if they improve on testing data. 
+                use_semi_test = False
+            else: 
+                use_semi_test = True
+                semi_batch_size = 450 # At this point we should just test on the whole semi partition. But I didnt want to recode. Before we reduced size for fast early fitting
             read_out("epoch") 
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
@@ -672,16 +683,34 @@ class DNN:
         #   Undo Dropout and Print out final results of fits call, then revert
         undo_drop_out()        
 
+    def classify_images(self):
+        #   Put any images you want classified into the live feed folder
+        live_feed_dest = "live_feed"
+        images = []
+        with os.scandir(live_feed_dest) as image_paths:
+            for image_path in image_paths:
+                #print(image_path.name)
+                color_img = Image.open(live_feed_dest + "/" +  image_path.name)
+                gray_img = ImageOps.grayscale(color_img)
+                gray_img.show()
+                #n_img = np.array( gray_img).swapaxes(1,0).flatten()
+                img = self.data.normalize_tensor( np.array( gray_img ).flatten() ) # img to Cupy => flatten => normalize 
+                images.append(img)
+                
+        batch = np.zeros(shape=(28**2, len(images))).astype(float) #    Images need to be 28**2
+        for i, image in enumerate(images):
+            batch[:, i] = image 
+            
+        classifications = np.argmax(self.feed_forward(batch), axis=0)
+        print( "\nAttempted Classifications for your batch are: " + str(classifications) )
+
 class MNIST:
     def __init__(self, debug=False) -> None:
 
-        def normalize_tensor(tensor):
-            #   Normalize the inpute to keep it close to activation value 0. We change data structure to float
-            active_pixels = tensor != 0
-            z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
-            tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
-            tensor[active_pixels] = z_scores_of_pixels
-            return tensor / tensor.shape[0]
+        def initialize_normalizer():
+            active_pixels = self.train_data != 0
+            self.std = np.std(self.train_data[active_pixels])
+            self.average = np.average(self.train_data[active_pixels])
 
         def load_data_from_csv(file_location):
             """
@@ -689,21 +718,18 @@ class MNIST:
             """
             #   
             data = np.genfromtxt(file_location, delimiter=',', dtype=np.uint8)[1:] #    First Row is Gumbo     
-            #   Pause here and call images if you want. Before normalization
-            #MNIST.show_image_from_row(data.test_data, 0)
-
+            
             #   Solution as a one hot vector. In MNIST we have 0-9 as labels. We put the position of the output neurons as the value of the label
             supervision = np.zeros(shape=(10, len(data))) # Ten Labels X Data set rows 
             supervision[data[:,0], range(len(data))] = 1
 
-            #   This is the last point you can draw img without reversing z score to pixels
-
-            #   A instance is a column as input in matrix multiplication thus the transpose. Remove the label column
+            #   A instance is a column as input in matrix multiplication thus the transpose. 1: Remove the labels column. labels for each arg from excel etc
             data = data[:,1:].transpose() 
-            data = normalize_tensor(data) # This will convert to z scores from data 
+            #data = normalize_tensor(data) # This will convert to z scores from data 
             
             return data, supervision
 
+        run_test = False #  Test that normalize and de normalize are inverse. dev time only
         #   Uncomment each section for effect. 
 
         #   Full train Full test. not recommended
@@ -721,24 +747,58 @@ class MNIST:
             self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
             self.test_data, self.test_supervision = self.test_data[:,:1000], self.test_supervision[:,:1000] # This is to speed up operation. I only need 500 sample size for test 
         
-    @staticmethod
-    def show_image_from_row(data, row):
-        image = data[row,1:].reshape(28,28) #   Skip label
-        #   Image will not work unless dtype is uint8
-        image = np.repeat(image[:,:,np.newaxis], 3, axis=2).astype(np.uint8) #   RGB repeat for black and white                
-        Image.fromarray(image, 'RGB').show()
-        #Image.fromarray(image, 'RGB').save("temp/random.jpg")
-        print("\nLable for image: " + str(data[row,0]))
+        initialize_normalizer()
+        if run_test:
+            temp = self.test_data
+            temp_n = self.normalize_tensor(temp)
+            if np.all( temp == self.de_normalize_tensor(temp_n) ): raise Exception("De normalize and normalize are not inverse")
+        self.train_data, self.test_data = self.normalize_tensor(self.train_data), self.normalize_tensor(self.test_data)
 
-global_storage = shelve.open("persistance") 
-#global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all 
-champ_dnn = global_storage["champ dnn"]
+    def show_elements(self, elements):
+        # #   Image will not work unless dtype is uint8
+        mosaic_width = (28*5)
+        if len(elements) > mosaic_width**2: raise Exception("Too many elments to show")
+        mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
+        for i, element in enumerate(elements):
+            image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
+            row, column = 28*(i // 5), 28*(i % 5)
+            mosaic[row:row+28, column:column+28] = image
+        Image.fromarray(mosaic, 'L').show() #    L to flag grayscale
+        print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) )
 
-try_for_better_dnn = True
-if try_for_better_dnn:
-    data = MNIST(debug=False) #    Load data for supervised learning of spawns
-    neurons_per_layer = [500, 100, 25] # First layers neuron count. Second layer defined implicitly
-    drop_out_per_layer = [0.4, .5, 0.4] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+    def normalize_tensor(self, tensor):
+        #   For any shape tensor: Normalize the inpute to keep it close to activation value 0. We change data structure to float
+        active_pixels = tensor != 0
+        #z_scores_of_pixels = (tensor[active_pixels] - np.average(tensor[active_pixels])) / np.std(tensor[active_pixels])
+        z_scores_of_pixels = (tensor[active_pixels] - self.average) / self.std
+        tensor = np.zeros_like(tensor, dtype=float) #   This changes the data structure from uint8 to float
+        tensor[active_pixels] = z_scores_of_pixels
+        return tensor / tensor.shape[0] #   This last step I added so that as we use more inputs, the scale gets exponetially smaller, thus keeping the flows closer to 0 where we want them
+
+    def de_normalize_tensor(self, tensor):
+        active_pixels = tensor != 0
+        tensor[active_pixels] = ((tensor[active_pixels] * tensor.shape[0] * self.std) + self.average).astype(np.uint8)
+        return tensor
+
+
+debug = True
+try_for_better_dnn = False
+
+if not try_for_better_dnn:
+    data = MNIST(debug=debug) #    Load data for supervised learning of spawns
+    #data.show_elements([2,5,6,7,9,11,23,45,67,100,24,77,453]) 
+    with shelve.open("persistance") as global_storage:
+        champ_dnn = global_storage["champ dnn"]
+        global_storage["best accuracy"] #  I call this to insure that there is no bugs before you leave to let it train
+    champ_dnn.classify_images()
+
+else:
+    with shelve.open("persistance") as global_storage:
+        global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all     
+    
+    data = MNIST(debug=debug) #    Load data for supervised learning of spawns
+    neurons_per_layer = [420, 90, 20] # First layers neuron count. Second layer defined implicitly
+    drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
     dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
     step_algorithm = "parabola"
@@ -754,11 +814,11 @@ if try_for_better_dnn:
     Home stretch 
         
         train on labels to images then print 
-            draw numbers and parse them for classification
-            feed generator to classifierer and test accur 
         
-        try on your hand writting with paint
-    
+        draw numbers and parse them for classification
+        
+        feed generator to classifierer and test accur 
+        
         add numerical gradients as in video for test.  
             https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
 
