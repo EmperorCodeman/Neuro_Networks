@@ -588,7 +588,7 @@ class DNN:
             with shelve.open("persistance") as global_storage: #    This will sync storage and close connection at end
                 test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
                 if test_accuracy > global_storage["best accuracy"]:      
-                    improvement_percentage = (1 - test_accuracy/global_storage["best accuracy"])*100
+                    improvement_percentage = (test_accuracy/global_storage["best accuracy"] - 1)*100
                     global_storage["best accuracy"] = test_accuracy
                     data_temp = copy.deepcopy( self.data )
                     self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
@@ -684,25 +684,34 @@ class DNN:
         undo_drop_out()        
 
     def classify_images(self):
+        test = False
         #   Put any images you want classified into the live feed folder
         live_feed_dest = "live_feed"
         images = []
+        labels = []
         with os.scandir(live_feed_dest) as image_paths:
             for image_path in image_paths:
-                #print(image_path.name)
                 color_img = Image.open(live_feed_dest + "/" +  image_path.name)
                 gray_img = ImageOps.grayscale(color_img)
-                gray_img.show()
-                #n_img = np.array( gray_img).swapaxes(1,0).flatten()
-                img = self.data.normalize_tensor( np.array( gray_img ).flatten() ) # img to Cupy => flatten => normalize 
+                #img = self.data.normalize_tensor( np.array( gray_img ).flatten() ) # img to Cupy => flatten => normalize 
+                #gray_img.show( self.data.de_normalize( img).reshape((28,28)) ) #    This tests that the data prep is working by making sure inverse of inverse is the same
+                #print(image_path.name)
+                img = np.array(gray_img).flatten()
+                labels.append(int(image_path.name[0]))
                 images.append(img)
-                
         batch = np.zeros(shape=(28**2, len(images))).astype(float) #    Images need to be 28**2
         for i, image in enumerate(images):
             batch[:, i] = image 
-            
+        batch = MNIST.black_and_white(batch)
+        if test:    # Test that your 
+            sample = batch[:, 0].reshape(28,28).get()
+            active = sample != 0
+            sample[active] = 255
+            Image.fromarray(sample.astype(np_.uint8), 'L').show() #    L to flag grayscale
+        
         classifications = np.argmax(self.feed_forward(batch), axis=0)
-        print( "\nAttempted Classifications for your batch are: " + str(classifications) )
+        accuracy = str( int(np.round( np.sum( classifications == np.array(labels) ) / len(labels) , 2)*100) )
+        print( "\nAttempted Classifications for your batch are: " + str(classifications) + "\n\tAccuracy is: " + accuracy + "%")
 
 class MNIST:
     def __init__(self, debug=False) -> None:
@@ -752,19 +761,33 @@ class MNIST:
             temp = self.test_data
             temp_n = self.normalize_tensor(temp)
             if np.all( temp == self.de_normalize_tensor(temp_n) ): raise Exception("De normalize and normalize are not inverse")
-        self.train_data, self.test_data = self.normalize_tensor(self.train_data), self.normalize_tensor(self.test_data)
+        #self.train_data, self.test_data = self.normalize_tensor(self.train_data), self.normalize_tensor(self.test_data)
+        self.train_data, self.test_data = MNIST.black_and_white(self.train_data), MNIST.black_and_white(self.test_data)
 
-    def show_elements(self, elements):
-        # #   Image will not work unless dtype is uint8
-        mosaic_width = (28*5)
+    def show_elements(self):
+        #   This function allows you to view random elements of the data set 
+        print_labels, compress = False, False
+        images_per_row = 30
+        elements = np.random.randint(0, self.train_data.shape[1], images_per_row**2)
+        
+        mosaic_width = (28*images_per_row)
         if len(elements) > mosaic_width**2: raise Exception("Too many elments to show")
         mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
         for i, element in enumerate(elements):
-            image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
-            row, column = 28*(i // 5), 28*(i % 5)
+            # #   Image will not work unless dtype is uint8
+            #image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
+            image = (self.test_data[:,element] * self.test_data.shape[0] * 255).reshape(28, 28).get().astype(np.uint8) # for black and white. uncomment above if data is normalized
+            row, column = 28*(i // images_per_row), 28*(i % images_per_row)
             mosaic[row:row+28, column:column+28] = image
-        Image.fromarray(mosaic, 'L').show() #    L to flag grayscale
-        print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) )
+    
+        if print_labels:    print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) ) # Extraneous 
+        if compress: 
+            #   If you want to preview some level of compression call this line
+            conserve = .25
+            Image.fromarray(mosaic, 'L').resize((int(mosaic_width*conserve),int(mosaic_width*conserve))).show()
+        else: 
+            Image.fromarray(mosaic, 'L').show() #    L to flag grayscale
+        
 
     def normalize_tensor(self, tensor):
         #   For any shape tensor: Normalize the inpute to keep it close to activation value 0. We change data structure to float
@@ -780,13 +803,20 @@ class MNIST:
         tensor[active_pixels] = ((tensor[active_pixels] * tensor.shape[0] * self.std) + self.average).astype(np.uint8)
         return tensor
 
+    @staticmethod
+    def black_and_white(tensor):
+        # create a filter to make the images as thin and uniform as possible. 
+        tensor_ = np.zeros_like(tensor, dtype=float)
+        active = tensor != 0
+        tensor_[active] = 1 / tensor.shape[0]
+        return tensor_
 
 debug = True
 try_for_better_dnn = False
 
 if not try_for_better_dnn:
     data = MNIST(debug=debug) #    Load data for supervised learning of spawns
-    #data.show_elements([2,5,6,7,9,11,23,45,67,100,24,77,453]) 
+    data.show_elements() 
     with shelve.open("persistance") as global_storage:
         champ_dnn = global_storage["champ dnn"]
         global_storage["best accuracy"] #  I call this to insure that there is no bugs before you leave to let it train
