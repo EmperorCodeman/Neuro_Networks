@@ -1,5 +1,5 @@
 import numpy as np_ #   Numpy uses the CPU. Its slower, but the library appears more stable, and better exception handeling 
-from PIL import Image, ImageOps # Used to debug images. Optional 
+from PIL import Image, ImageOps, ImageFilter # Used to debug images. Optional 
 import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occures making tracing harder then Numpy
 import time #   Used to time program speed. Optional 
 import shelve  
@@ -189,6 +189,9 @@ class DNN:
          #  Attach data set to DNN. You can switch data set at any time for transfer learning
         self.data = data
 
+        #   Store meta data
+        self.neurons_per_layer, self.drop_out_per_layer = neurons_per_layer, drop_out_per_layer
+
         #   Dropout prep
         number_of_neurons_to_keep = []
         all_neuron_indicies      = []         
@@ -372,7 +375,7 @@ class DNN:
 
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
-    def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola"):
+    def fit(self, batch_size=12, epochs_limit=3, algorithm="parabola", fit_to_my_data=False):
 
         def delta_loss(step_magnitude, last_loss, buffered_network, buffered_biases):
             #   Only a temp update of the layer
@@ -496,7 +499,7 @@ class DNN:
                 else: 
                     normalize_gradients_ = " not using Normalized Gradients"
                 print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_)
-                print("\n\t\t\t\tNeurons per Layer: " + str(neurons_per_layer) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(drop_out_per_layer) + \
+                print("\n\t\t\t\tNeurons per Layer: " + str(self.neurons_per_layer) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(self.drop_out_per_layer) + \
                     "\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
             elif message_type == "epoch":
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
@@ -516,6 +519,7 @@ class DNN:
                 read_out("progress")
                 total_time = (time.time() - start_time) / 60
                 print("\nTotal Execution Time: " + f'{total_time:.2E}' + " Minutes")
+                self.classify_images()
 
             else: raise Exception("No message of type")
 
@@ -578,42 +582,53 @@ class DNN:
             
             #   Scale weights to so additional layers dont increase magnitude to activation 
             for layer in range(len(self.layers) - 1):
-                restore_total_weight = 1 - drop_out_per_layer[layer]
+                restore_total_weight = 1 - self.drop_out_per_layer[layer]
                 self.layers[layer] *= restore_total_weight
                 self.biases[layer] *= restore_total_weight
             
+            # Dont update the champ unless there is improvement to the actual data set your aiming for. Ie if pre transfer dont update
+            if use_semi_test: 
+                #   If this is the best net yet then store it
+                with shelve.open("persistance") as global_storage: #    This will sync storage and close connection at end
+                    test_accuracy = self.get_accuracy(semi_test_batch, semi_test_batch_supervision)
+                    if test_accuracy > global_storage["best accuracy"]:      
+                        improvement_percentage = np.round((test_accuracy/global_storage["best accuracy"] - 1)*100, 2)
+                        global_storage["best accuracy"] = test_accuracy
+                        data_temp = copy.deepcopy( self.data )
+                        self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
+                        self.data.test_supervision, self.data.train_supervision = None, None 
+                        
+                        global_storage["champ dnn"] = self
+                        self.data = data_temp # Ready up, so dnn can continue training 
+                        print("\n A Greater Champion has Emerged !!" + "\n" + str(improvement_percentage) + "% Improvment")
+                        #global_storage.sync()
+
             #   Log full nets performance and fitting time
             read_out("final")       
-            #   If this is the best net yet then store it
-            with shelve.open("persistance") as global_storage: #    This will sync storage and close connection at end
-                test_accuracy = self.get_accuracy(test_batch, test_batch_supervision)
-                if test_accuracy > global_storage["best accuracy"]:      
-                    improvement_percentage = (test_accuracy/global_storage["best accuracy"] - 1)*100
-                    global_storage["best accuracy"] = test_accuracy
-                    data_temp = copy.deepcopy( self.data )
-                    self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
-                    self.data.test_supervision, self.data.train_supervision = None, None 
-                    
-                    global_storage["champ dnn"] = self
-                    self.data = data_temp # Ready up, so dnn can continue training 
-                    print("\n A Greater Champion has Emerged !!" + "\n" + str(improvement_percentage) + "% Improvment")
-                    #global_storage.sync()
-
+            
             #   Revert to previous state for potential future training 
             for layer in range(len(self.layers) - 1):
-                restore_total_weight = 1 - drop_out_per_layer[layer]
+                restore_total_weight = 1 - self.drop_out_per_layer[layer]
                 self.layers[layer] /= restore_total_weight
                 self.biases[layer] /= restore_total_weight
 
-
+        #   Test used during boot fit
         test_sample_size = 500
         test_batch = self.data.test_data[:, 0:test_sample_size]
         test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
-        semi_test_batches = self.data.test_data[:, test_sample_size:]
-        semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
+        
+        #   Semi test is used for transfer learning. We insure that any changes help target data set and not just the massive data set used for boot
+        # semi_test_batches = self.data.test_data[:, test_sample_size:]
+        # semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
+        # use_semi_test = False
+        # semi_batch_size = 128 # Must be smaller than data. I set this as constant so it never is too large. Because the testing data is smaller than train
+        # probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out
+ 
+        semi_test_batch = self.data.my_test
+        semi_test_batch_supervision = self.data.my_test_supervision
         use_semi_test = False
-        semi_batch_size = 128 # Must be smaller than data. I set this as constant so it never is too large. Because the testing data is smaller than train
-        probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out
+        
+        probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out per epoch
         normalize_gradients = True
         
         #   Parabolic function vars
@@ -627,12 +642,14 @@ class DNN:
         read_out("init")
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
-            if batch_size < 1000: # Once you are past 1000 size batch size. Only change weights if they improve on testing data. 
-                use_semi_test = False
-            else: 
-                use_semi_test = True
-                semi_batch_size = 450 # At this point we should just test on the whole semi partition. But I didnt want to recode. Before we reduced size for fast early fitting
-            read_out("epoch") 
+            # if batch_size < 1000: # Once you are past 1000 size batch size. Only change weights if they improve on testing data. 
+            #     use_semi_test = False
+            # else: 
+            #     use_semi_test = True
+            #     semi_batch_size = 450 # At this point we should just test on the whole semi partition. But I didnt want to recode. Before we reduced size for fast early fitting
+            if fit_to_my_data: use_semi_test = True
+            if epochs_limit < 3: # keep from congesting terminal
+                read_out("epoch") 
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
                     i = batch iteration
@@ -645,16 +662,16 @@ class DNN:
                         This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
                         Thus we randomize the sequence of windows 
                 """
-               
                 #   Update batch for current iteration
                 inter_epoch_iteration += 1     
                 #   We build the gradient from the training data
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
+                
                 #   I probe potential steps of the gradient to add to the net with a partition of the testing data. This insures steps always generalize to unseen data and are not overfitting the net to training data 
-                semi_batch_i = np.random.randint(0, semi_test_batches.shape[1] - semi_batch_size)
-                semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i + semi_batch_size]
-                semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i + semi_batch_size]                
+                #semi_batch_i = np.random.randint(0, semi_test_batches.shape[1] - semi_batch_size)
+                #semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i + semi_batch_size]
+                #semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i + semi_batch_size]                
 
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
@@ -683,7 +700,7 @@ class DNN:
         #   Undo Dropout and Print out final results of fits call, then revert
         undo_drop_out()        
 
-    def classify_images(self):
+    def classify_images(self, type="filtered"):
         test = False
         #   Put any images you want classified into the live feed folder
         live_feed_dest = "live_feed"
@@ -700,21 +717,49 @@ class DNN:
                 labels.append(int(image_path.name[0]))
                 images.append(img)
         batch = np.zeros(shape=(28**2, len(images))).astype(float) #    Images need to be 28**2
+        labels = np.array(labels)
         for i, image in enumerate(images):
             batch[:, i] = image 
-        batch = MNIST.black_and_white(batch)
-        if test:    # Test that your 
-            sample = batch[:, 0].reshape(28,28).get()
-            active = sample != 0
-            sample[active] = 255
-            Image.fromarray(sample.astype(np_.uint8), 'L').show() #    L to flag grayscale
+        if type == "black or white":
+            batch = MNIST.black_and_white(batch, white_and_black=False)
+        else:
+            batch = MNIST.pre_process_images(batch)
         
         classifications = np.argmax(self.feed_forward(batch), axis=0)
-        accuracy = str( int(np.round( np.sum( classifications == np.array(labels) ) / len(labels) , 2)*100) )
-        print( "\nAttempted Classifications for your batch are: " + str(classifications) + "\n\tAccuracy is: " + accuracy + "%")
+        is_correct = classifications == labels
+        not_correct = np.logical_not( is_correct )
+        accuracy = str( int(np.round( np.sum( is_correct ) / len(labels) , 2)*100) )
+        if test:    # Test that your 
+            sampel_size = 3
+            print("correct classifications were:   " + str(classifications[is_correct]))
+            print("incorrect classifications were: " + str(classifications[not_correct]))
+            for i in range(sampel_size):    
+                sample = batch[:, not_correct][:, i].reshape(28,28).get()
+                active = sample != 0
+                sample[active] = 255
+                Image.fromarray(sample.astype(np_.uint8), 'L').show() #    L to flag grayscale
+        print("\nClassification of live Feed was: \n\tAccuracy was: " + accuracy + "%")
+        print( "\nAttempted Classifications for your batch were: " + str(classifications))
+        print(   "Correct Classifications would be:              " + str(labels))
 
 class MNIST:
-    def __init__(self, debug=False) -> None:
+
+    def __init__(self):
+        with shelve.open("persistance") as global_storage:
+            self.train_data = global_storage["train primed"]
+            self.test_data = global_storage["test primed"]
+            self.train_supervision = global_storage["train primed supervision"]
+            self.test_supervision = global_storage["test primed supervision"]
+            self.my_train = global_storage["my train primed"]
+            self.my_train_supervision = global_storage["my train primed supervision"]
+            self.my_test = global_storage["my test primed"]
+            self.my_test_supervision = global_storage["my test primed supervision"]
+            self.live_feed = global_storage["live feed"]
+            self.live_feed_supervision = global_storage["live feed supervision"]
+
+    @staticmethod
+    def boot(debug=False) -> None:
+        #   Load data set from csv => preprocess it => then save it to shelve for fast recall
 
         def initialize_normalizer():
             active_pixels = self.train_data != 0
@@ -738,6 +783,41 @@ class MNIST:
             
             return data, supervision
 
+        def load_data_from_images(file_location, type="filter"):
+            test = False
+            #   Put any images you want classified into the live feed folder
+            images = []
+            labels = []
+            with os.scandir(file_location) as image_paths:
+                for image_path in image_paths:
+                    color_img = Image.open(file_location + "/" +  image_path.name)
+                    gray_img = ImageOps.grayscale(color_img)
+                    #img = self.data.normalize_tensor( np.array( gray_img ).flatten() ) # img to Cupy => flatten => normalize 
+                    #gray_img.show( self.data.de_normalize( img).reshape((28,28)) ) #    This tests that the data prep is working by making sure inverse of inverse is the same
+                    #print(image_path.name)
+                    img = np.array(gray_img).flatten()
+                    labels.append(int(image_path.name[0]))
+                    images.append(img)
+            batch = np.zeros(shape=(28**2, len(images))).astype(float) #    Images need to be 28**2
+            labels = np.array(labels)
+            labels_ = np.zeros(shape=(10, labels.shape[0]))
+            labels_[labels, np.arange(0, len(labels))] = 1
+            for i, image in enumerate(images):
+                batch[:, i] = image 
+
+            shuffle_i = np.random.permutation( batch.shape[1] )
+            batch = batch.transpose()[shuffle_i].transpose()
+            labels_ = labels_.transpose()[shuffle_i].transpose()
+            if test:    # Test that your doing stuff right by looking at it
+                sampel_size = 3
+                for i in range(sampel_size):    
+                    sample = batch[:, i].reshape(28,28).get()
+                    active = sample != 0
+                    sample[active] = 255
+                    Image.fromarray(sample.astype(np_.uint8), 'L').show() #    L to flag grayscale
+                    print("label " + str( np.argmax(labels_, axis=0)[i] ) )
+            return batch, labels_
+
         run_test = False #  Test that normalize and de normalize are inverse. dev time only
         #   Uncomment each section for effect. 
 
@@ -747,48 +827,71 @@ class MNIST:
 
         #   Use this for quick load for development
         if debug:
-            self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
-            self.test_data, self.test_supervision = self.train_data[:,9000:], self.train_supervision[:,9000:] 
-            self.train_data, self.train_supervision = self.train_data[:,:9000], self.train_supervision[:,:9000]
+            train_data, train_supervision = load_data_from_csv('data_sets/mnist_test.csv')
+            test_data, test_supervision = train_data[:,9000:], train_supervision[:,9000:] 
+            train_data, train_supervision = train_data[:,:9000], train_supervision[:,:9000]
         else:
             #   Full train and sufficient test. Recommended 
-            self.train_data, self.train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
-            self.test_data, self.test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
-            self.test_data, self.test_supervision = self.test_data[:,:1000], self.test_supervision[:,:1000] # This is to speed up operation. I only need 500 sample size for test 
+            train_data, train_supervision = load_data_from_csv('data_sets/mnist_train.csv')
+            test_data, test_supervision =   load_data_from_csv('data_sets/mnist_test.csv')
+            test_data, test_supervision = test_data[:,:1000], test_supervision[:,:1000] # This is to speed up operation. I only need 500 sample size for test 
+        MNIST.pre_process_images(train_data, "train primed", train_supervision), MNIST.pre_process_images(test_data, "test primed", test_supervision)
         
-        initialize_normalizer()
-        if run_test:
-            temp = self.test_data
-            temp_n = self.normalize_tensor(temp)
-            if np.all( temp == self.de_normalize_tensor(temp_n) ): raise Exception("De normalize and normalize are not inverse")
+        #   I transfer learn over to my own handwritting because even with 97 accuracy the net cant figure out change of pen size spacing and style 
+        my_handwritting_train, my_handwritting_train_supervision = load_data_from_images("data_sets/my handwritting train")
+        my_handwritting_test, my_handwritting_test_supervision =   load_data_from_images("data_sets/my handwritting test")
+        live_feed_batch, live_feed_labels =                        load_data_from_images("live_feed")
+        MNIST.pre_process_images(live_feed_batch,       "live feed",        live_feed_labels)
+        MNIST.pre_process_images(my_handwritting_train, "my train primed",  my_handwritting_train_supervision)
+        MNIST.pre_process_images(my_handwritting_test,  "my test primed",   my_handwritting_test_supervision)
+        
+        #initialize_normalizer()
+        # if run_test:
+        #     temp = self.test_data
+        #     temp_n = self.normalize_tensor(temp)
+        #     if np.all( temp == self.de_normalize_tensor(temp_n) ): raise Exception("De normalize and normalize are not inverse")
         #self.train_data, self.test_data = self.normalize_tensor(self.train_data), self.normalize_tensor(self.test_data)
-        self.train_data, self.test_data = MNIST.black_and_white(self.train_data), MNIST.black_and_white(self.test_data)
+        #self.train_data, self.test_data = MNIST.black_and_white(self.train_data), MNIST.black_and_white(self.test_data)
+        pass
 
-    def show_elements(self):
+    def show_elements(self, data_set):
         #   This function allows you to view random elements of the data set 
         print_labels, compress = False, False
         images_per_row = 30
-        elements = np.random.randint(0, self.train_data.shape[1], images_per_row**2)
+        
+        if data_set == "train":
+            data_set = self.train_data
+        elif data_set == "test":
+            data_set = self.test_data
+        elif data_set == "my train":
+            data_set = self.my_train
+        elif data_set == "my test":
+            data_set = self.my_test
+        elif data_set == "live feed":
+            data_set = self.live_feed 
         
         mosaic_width = (28*images_per_row)
+        total_images_to_show = min(images_per_row**2, data_set.shape[1])
+        elements = np.random.randint(0, data_set.shape[1], total_images_to_show)
         if len(elements) > mosaic_width**2: raise Exception("Too many elments to show")
         mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
+
         for i, element in enumerate(elements):
             # #   Image will not work unless dtype is uint8
             #image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
-            image = (self.test_data[:,element] * self.test_data.shape[0] * 255).reshape(28, 28).get().astype(np.uint8) # for black and white. uncomment above if data is normalized
+            image = (data_set[:,element] * data_set.shape[0] * 255).reshape(28, 28).get().astype(np.uint8) # for black and white. uncomment above if data is normalized
             row, column = 28*(i // images_per_row), 28*(i % images_per_row)
             mosaic[row:row+28, column:column+28] = image
     
-        if print_labels:    print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) ) # Extraneous 
+        #if print_labels:    print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) ) # Extraneous 
         if compress: 
             #   If you want to preview some level of compression call this line
             conserve = .25
             Image.fromarray(mosaic, 'L').resize((int(mosaic_width*conserve),int(mosaic_width*conserve))).show()
         else: 
+            #Image.fromarray(image, "L").show() #    Use this to test the framing of individual elements
             Image.fromarray(mosaic, 'L').show() #    L to flag grayscale
-        
-
+            
     def normalize_tensor(self, tensor):
         #   For any shape tensor: Normalize the inpute to keep it close to activation value 0. We change data structure to float
         active_pixels = tensor != 0
@@ -804,41 +907,133 @@ class MNIST:
         return tensor
 
     @staticmethod
-    def black_and_white(tensor):
-        # create a filter to make the images as thin and uniform as possible. 
-        tensor_ = np.zeros_like(tensor, dtype=float)
-        active = tensor != 0
-        tensor_[active] = 1 / tensor.shape[0]
-        return tensor_
+    def black_and_white(tensor, white_and_black=True):
+        if white_and_black:
+            #   Black is active. We switch it so white is active and scale for stability. 
+            tensor_ = np.zeros_like(tensor, dtype=float)
+            active = tensor != 255
+            tensor_[active] = 1 / tensor.shape[0]
+            tensor_[np.logical_not(active)] = 0
+            return tensor_
+        else:
+            tensor_ = np.zeros_like(tensor, dtype=float)
+            active = tensor != 0
+            tensor_[active] = 1 / tensor.shape[0]
+            return tensor_
 
-debug = True
-try_for_better_dnn = False
+    @staticmethod
+    def to_on_or_off(tensor):
+        tensor[tensor != 0] = 255
+        return tensor
+
+    @staticmethod
+    def pre_process_images(batch, save_to=None, supervison=None):
+        #   If a row or column is dead then crop it. Then expand size of image back to its original shape. 
+        batch.reshape((batch.shape[1], 28, 28))
+        for i, image in enumerate( batch.transpose() ):
+            image = image.reshape(28,28)
+            
+            image[image != 0] = 255 # Black or white
+            img = Image.fromarray( image.get().astype(np.uint8), "L" ).resize((30,30))
+            img = img.filter(ImageFilter.CONTOUR) # Filter will leave only the contour 
+            image = np.array( img )
+
+            active_rows, active_columns = np.sum(image, axis=1) != 0, np.sum(image, axis=0) != 0 #  Remove the border created by contour filter
+            image = image[active_rows]
+            image = image[:, active_columns]    
+            active_rows, active_columns = np.sum(image, axis=1) != 255*image.shape[0], np.sum(image, axis=0) != 255*image.shape[1] #  center image
+            image = image[active_rows]
+            image = image[:, active_columns]   
+
+            image[image != 255] = 0 #   Remove noise. black or white. no gray
+            img = Image.fromarray(image.get().astype(np_.uint8), 'L').resize((28,28)) # Restore original shape
+            image = np.array(img)
+            image[image != 255] = 0 #   Remove noise. black or white. no gray
+            #img.show()
+
+            batch[:, i] = image.flatten()
+
+
+        batch = MNIST.black_and_white(batch) # swap to white on black off. Also scale the values for numerical stability 
+        # Image.fromarray( MNIST.to_on_or_off( batch[:,0]).reshape((28,28)).get().astype(np_.uint8), 'L').show() # test image
+        if save_to == None:
+            return batch
+        with shelve.open("persistance") as global_storage:  
+            global_storage[save_to] = batch #save
+            global_storage[save_to + " supervision"] = supervison #save
+            
+        return batch
+
+
+try_for_better_dnn = True
 
 if not try_for_better_dnn:
-    data = MNIST(debug=debug) #    Load data for supervised learning of spawns
-    data.show_elements() 
+    data = MNIST()
+    #data.show_elements("train")
+    #data.show_elements("test")
+    #data.show_elements("my train") 
+    #data.show_elements("my test") 
+    data.show_elements("live feed") 
     with shelve.open("persistance") as global_storage:
         champ_dnn = global_storage["champ dnn"]
-        global_storage["best accuracy"] #  I call this to insure that there is no bugs before you leave to let it train
     champ_dnn.classify_images()
 
 else:
-    with shelve.open("persistance") as global_storage:
-        global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all     
-    
-    data = MNIST(debug=debug) #    Load data for supervised learning of spawns
-    neurons_per_layer = [420, 90, 20] # First layers neuron count. Second layer defined implicitly
-    drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-
-    dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=data)
     step_algorithm = "parabola"
-
     start_time = time.time() #  Global start time will allow global access
-    dnn_spawn.fit(batch_size=3,  epochs_limit=1, algorithm=step_algorithm)
-    dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)
-    dnn_spawn.fit(batch_size=128, epochs_limit=2, algorithm=step_algorithm)
-    dnn_spawn.fit(batch_size=5000, epochs_limit=1, algorithm=step_algorithm)
+    
+    def boot():
+        #   Boot code
+        with shelve.open("persistance") as global_storage:
+            global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all     
+        MNIST.boot(debug=False) 
 
+    def change_data_set(esoteric=True):
+        if esoteric:
+            dnn_spawn.data.train_data = data.my_train
+            dnn_spawn.data.train_supervision = data.my_train_supervision
+            dnn_spawn.data.test_data = data.my_test
+            dnn_spawn.data.test_supervision = data.my_test_supervision    
+        else:
+            dnn_spawn.data.train_data = data.train_data
+            dnn_spawn.data.train_supervision = data.train_supervision
+            dnn_spawn.data.test_data = data.test_data
+            dnn_spawn.data.test_supervision = data.test_supervision
+
+    boot() #    Only call to erase champ dnn and reload data from images and csv
+    hone_champion = True
+    data = MNIST() #    Load data for supervised learning of spawns
+    
+    if hone_champion:
+        with shelve.open("persistance") as global_storage:
+            dnn_spawn = global_storage["champ dnn"]
+            dnn_spawn.data = copy.deepcopy( data )
+    else:    
+        neurons_per_layer = [420, 90, 20] # First layers neuron count. Second layer defined implicitly
+        drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+        dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=copy.deepcopy(data))
+
+    if not hone_champion:
+        #   Launch random net => train on general data to get ball park 
+        dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)    
+        change_data_set(esoteric=True)
+        #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving
+        dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False)
+        change_data_set(esoteric=False)
+    
+    #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
+    #   Switch to giant free data set but put in lock 
+    dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+    dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+    dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+    
+
+    change_data_set(esoteric=True)
+    #   Lastly we hone the model with 
+    dnn_spawn.fit(batch_size=32, epochs_limit=200, algorithm=step_algorithm, fit_to_my_data=True)
+       
+
+    
 
 """
     Home stretch 
