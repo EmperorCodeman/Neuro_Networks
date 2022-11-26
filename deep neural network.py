@@ -505,15 +505,20 @@ class DNN:
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
             elif message_type == "progress":
                 loss = self.get_loss(self, batch, batch_supervision)
+                test_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision) 
                 if loss < 0.01: 
                     nonlocal use_semi_test
                     if not use_semi_test:
                         use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
                         print("\n\nUsing Semi test now\n")
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
+                if fit_to_my_data:
+                    testing_accuracy_label = "Esoteric Testing Accuracy: "
+                else:
+                    testing_accuracy_label = "Testing Accuracy: "
                 train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2))\
-                    + "\t Training Accuracy: " + str(train_accuracy) + "\t\t Testing Accuracy: " + str(test_accuracy))
+                print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2)) + "\tSemi Testing Loss: " + str(np.round(test_loss, 2))\
+                    + "\t Training Accuracy: " + str(train_accuracy) + "\t\t" + testing_accuracy_label + str(test_accuracy))
             elif "final":
                 print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
                 read_out("progress")
@@ -593,6 +598,8 @@ class DNN:
                     test_accuracy = self.get_accuracy(semi_test_batch, semi_test_batch_supervision)
                     if test_accuracy > global_storage["best accuracy"]:      
                         improvement_percentage = np.round((test_accuracy/global_storage["best accuracy"] - 1)*100, 2)
+                        print("\nA Greater Champion has Emerged !!")
+                        print("Previous semi test accuracy was: " + str(np.round(global_storage["best accuracy"], 2)) + " improved to: " + str(np.round(test_accuracy, 2)) + "\n\t" + str(improvement_percentage) + "% Improvment")
                         global_storage["best accuracy"] = test_accuracy
                         data_temp = copy.deepcopy( self.data )
                         self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
@@ -600,7 +607,6 @@ class DNN:
                         
                         global_storage["champ dnn"] = self
                         self.data = data_temp # Ready up, so dnn can continue training 
-                        print("\n A Greater Champion has Emerged !!" + "\n" + str(improvement_percentage) + "% Improvment")
                         #global_storage.sync()
 
             #   Log full nets performance and fitting time
@@ -612,11 +618,16 @@ class DNN:
                 self.layers[layer] /= restore_total_weight
                 self.biases[layer] /= restore_total_weight
 
-        #   Test used during boot fit
-        test_sample_size = 500
-        test_batch = self.data.test_data[:, 0:test_sample_size]
-        test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
+        if fit_to_my_data:
+            test_batch, test_batch_supervision = self.data.my_test, self.data.my_test_supervision
+        else:
+            #   Test used during boot fit. We test against the giant data set before transfer learning on esoteric
+            test_sample_size = 500
+            test_batch = self.data.test_data[:, 0:test_sample_size]
+            test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         
+
+
         #   Semi test is used for transfer learning. We insure that any changes help target data set and not just the massive data set used for boot
         # semi_test_batches = self.data.test_data[:, test_sample_size:]
         # semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
@@ -872,7 +883,10 @@ class MNIST:
         
         mosaic_width = (28*images_per_row)
         total_images_to_show = min(images_per_row**2, data_set.shape[1])
-        elements = np.random.randint(0, data_set.shape[1], total_images_to_show)
+        if total_images_to_show > data_set.size: # TODO sort the sample no matter its size so its easier to read 
+            elements = np.random.randint(0, data_set.shape[1], total_images_to_show)
+        else:
+            elements = np.arange(0, data_set.shape[1]) #   Show all in sequential order not random  
         if len(elements) > mosaic_width**2: raise Exception("Too many elments to show")
         mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
 
@@ -964,8 +978,44 @@ class MNIST:
             
         return batch
 
+"""
+    Here we can load images to shelve, we can load them from csv
+    We can hone saved nets or build new ones with any shape. 
+        We can engage a lock so that transfer learning or any learning for that matter only improves performance on the esoteric desired data set. 
+            Note we never access the live feed for any reason other than to predict final sucess on unseen data. This is a law
+            Note: The lock mechanism used to prevent updating champ to a worse testing accuracy(not worse live feed accur) is inside undo dropout 
+    We have utility functions to print mosiacs of the data sets for debug. 
+        We can load small data sets for debug. To produce fast epochs in development
+    The ground work of polymorphic changes to loss functions is in place. As well as polymorphic changes to step size algorithms for mini batch gradient descent
+    A logger is enabeled though semi confusing
+        Esoteric referes to the small data set you transfer learn onto. Testing is a partion that is itself partioned for the lock. Though with fit to my data on testing is only one partition
+        If the data set is too small epoch prints are disabled. De declutter read out. 
+    Drop out is properly implemented using best practices
+    Regularization is added with hyperparameters able to be tuned. This will punish larger weights. 
+        Use the regulizer as a case study of how to simply add terms to the loss function. Examine that terms are independent of each other in calculus. Thus the simplicity
+        Hyper links are added showing proofs for gradient descent induction
+    Numerical stability
+        Besides the regulaizer punishing larger weights with exponetial punishment. We use several other, sometimes brilliant methods to achieve stablity 
+        Most notably. Examine the link to the proof in softmax
+            A method was developed that stabalizes softmax perfectly. Using algebra. Another representation of softmax is found that is equivalent and stable numerically 
+        I use simple division to scale input by the number of input parameters. 
+        The gradients are normalized 
+        Line search algorithm only generates step magnitude none zero if loss is improved. Then larger batch size is used sequentially inorder to minimize pointless steping. Finally the lock is turned on. Making only good steps possible. No matter the numerical processes    
+    Filter:
+        Static preproccesing of images was used. Not sure how much it helped. There were differences between my handwritting with my tech and the borred general data set
+        To go further in this direction a CNN should be adopted. Which I will return to one day I hope. 
+        
+    I reached a satisfactory point. However inorder to properly solve MNIST. A convolutional net is recommended. To maintain a dnn solution the next step is to 
+        Add more examples to the my handwritting train directory. Its clear that this will greatly improve accuracy. Examine the read out and add which ones are incorrect the most
+            Note that inside various image functions there is a test flag which can be enabled to better trace your operation 
 
-try_for_better_dnn = True
+    Next I invert the network inorder to DREAM. Lables in image out. This is a more colorful way of sharing your experience with others. 
+    
+    Have fun with it. 
+    With Love: Palafita
+"""
+
+try_for_better_dnn = False
 
 if not try_for_better_dnn:
     data = MNIST()
@@ -976,6 +1026,7 @@ if not try_for_better_dnn:
     data.show_elements("live feed") 
     with shelve.open("persistance") as global_storage:
         champ_dnn = global_storage["champ dnn"]
+
     champ_dnn.classify_images()
 
 else:
@@ -1000,7 +1051,7 @@ else:
             dnn_spawn.data.test_data = data.test_data
             dnn_spawn.data.test_supervision = data.test_supervision
 
-    boot() #    Only call to erase champ dnn and reload data from images and csv
+    #boot() #    Only call to erase champ dnn and reload data from images and csv
     hone_champion = True
     data = MNIST() #    Load data for supervised learning of spawns
     
@@ -1017,22 +1068,24 @@ else:
         #   Launch random net => train on general data to get ball park 
         dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)    
         change_data_set(esoteric=True)
-        #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving
+        #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
         dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False)
         change_data_set(esoteric=False)
     
     #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
     #   Switch to giant free data set but put in lock 
     dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+    # dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+    # dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
     
 
     change_data_set(esoteric=True)
     #   Lastly we hone the model with 
-    dnn_spawn.fit(batch_size=32, epochs_limit=200, algorithm=step_algorithm, fit_to_my_data=True)
+    dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
        
-
+"""
+    Todo for dreaming. You must change the loss function to mean squared error. then change shape in init. Lastly you simply need to change the data.train to train. 
+"""
     
 
 """
@@ -1040,14 +1093,14 @@ else:
         
         train on labels to images then print 
         
-        draw numbers and parse them for classification
-        
         feed generator to classifierer and test accur 
         
-        add numerical gradients as in video for test.  
-            https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
+        
 
     DONE
+
+    add numerical gradients as in video for test.  This will test if your gradient is correct
+            https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
 
 
 """

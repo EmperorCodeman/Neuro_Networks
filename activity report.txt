@@ -4,7 +4,6 @@ Activity Report:
 	No fundemental change was needed when converting to batching or bias
 	
 	Failed to find way to optimize hyperparams. No theory. Not fun
-		Results are not volitile in terms of neurons or batch size. Though general range 			matters. Neurons matter way more than batch size. 
+		Results are not volitile in terms of neurons or batch size. Though general range matters. Neurons matter way more than batch size. 
 	70 percent testing accuracy without bias, final layer activation or cat loss
-	what we are doing is called stochastic gradient descent 
 	

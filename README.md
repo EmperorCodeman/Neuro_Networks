@@ -1,5 +1,6 @@
 ﻿# neuro-networks
-  
+Open this for formating. Not taking time to learn mark up. Open and spacing should work  
+
     Run numpy on the gpu for much faster performance. Using CuPy
 CuPy can use the nividia driver: CUDA. Install the driver and other dependecies. Other gpu drivers also work. Example amd 
   CuPy: https://cupy.dev/
