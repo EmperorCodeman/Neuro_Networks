@@ -994,6 +994,7 @@ class MNIST:
     Regularization is added with hyperparameters able to be tuned. This will punish larger weights. 
         Use the regulizer as a case study of how to simply add terms to the loss function. Examine that terms are independent of each other in calculus. Thus the simplicity
         Hyper links are added showing proofs for gradient descent induction
+        I use a threshold with the regulizer. If the weights are below the threshold. No penality. This avoids adding noise to the gradient with nominal weights. 
     Numerical stability
         Besides the regulaizer punishing larger weights with exponetial punishment. We use several other, sometimes brilliant methods to achieve stablity 
         Most notably. Examine the link to the proof in softmax
