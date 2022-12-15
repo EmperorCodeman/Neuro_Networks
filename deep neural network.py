@@ -32,6 +32,7 @@ import copy
     I audited this. Average loss does indeed decrease with smaller batch size. However this has no value in terms of testing accuracy. 
         The residual gets way smaller with smaller batch size. I think this is because the gradient is more focused on less columns. 
             Printing loss before step doesnt explain this. I dont know why the loss gets smaller with batch size.  
+            Note this is Average loss note total loss
     
     Bias theory:
         Bias is a translation of the origin in respective feature space
@@ -68,6 +69,46 @@ import copy
             Below seems unneeded because the fitting is not that hard. The problem is closing the difference between train and test. A difference that appears to converge to zero with sample size
                 Step different lengths for each layers weights and biases. This would create a massively complex step. Notice the last layers have more magnitude in their gradients. thus they should have smaller steps
                     To find their lengths. do mesh search... hyperdimensional line search. Find values and store them in a array. Then decay the array over iterations and use a multinomial to select the weights from there. 
+
+    
+        About the Program: 
+
+    We can hone saved nets or build new ones with any shape. 
+        We can engage a lock so that transfer learning or any learning for that matter only improves performance on the esoteric desired data set. 
+            Note we never access the live feed for any reason other than to predict final sucess on unseen data. This is a law
+            Note: The lock mechanism used to prevent updating champ to a worse testing accuracy(not worse live feed accur) is inside undo dropout 
+    We have utility functions to print mosiacs of the data sets for debug. 
+        We can load small data sets for debug. To produce fast epochs in development
+    The ground work of polymorphic changes to loss functions is in place. As well as polymorphic changes to step size algorithms for mini batch gradient descent
+    A logger is enabeled though semi confusing
+        Esoteric referes to the small data set you transfer learn onto. Testing is a partion that is itself partioned for the lock. Though with fit to my data on testing is only one partition
+        If the data set is too small epoch prints are disabled. De declutter read out. 
+    Drop out is properly implemented using best practices
+        My initution of dropout is
+            Drop out forces the brain to learn duality. Given different variables, find the same solution. For example, a geometric explanation of the pythagorian theorm when coupled with a algebraic expalanation, is a more reslilent thoerm in terms of noise or loss of parameters
+    Regularization is added with hyperparameters able to be tuned. This will punish larger weights. 
+        Use the regulizer as a case study of how to simply add terms to the loss function. Examine that terms are independent of each other in calculus. Thus the simplicity
+        I use a threshold with the regulizer. If the weights are below the threshold. No penality. This avoids adding noise to the gradient with nominal weights. 
+    Hyper links are added showing proofs for gradient descent induction
+    Numerical stability
+        Besides the regulaizer punishing larger weights with exponetial punishment. We use several other, sometimes brilliant methods to achieve stablity 
+        Most notably. Examine the link to the proof in softmax
+            A method was developed that stabalizes softmax perfectly. Using algebra. Another representation of softmax is found that is equivalent and stable numerically 
+        I use simple division to scale input by the number of input parameters. 
+        The gradients are normalized. This makes layers with more magnitude have smaller steps 
+        Line search algorithm only generates step magnitude none zero if loss is improved. Then larger batch size is used sequentially inorder to minimize pointless steping. Finally the lock is turned on. Making only good steps in terms of testing possible. No matter the numerical processes    
+    Filter:
+        Static preproccesing of images was used. Not sure how much it helped. There were differences between my handwritting with my tech and the borrowed general data set
+        To go further in this direction a CNN should be adopted. Which I will return to one day I hope. 
+        
+    I reached a satisfactory point. However inorder to properly solve MNIST. A convolutional net is recommended. To maintain a dnn solution the next step is to 
+        Add more examples to the my handwritting train directory. Its clear that this will greatly improve accuracy. Examine the read out and add which ones are incorrect the most
+            Note that inside various image functions there is a test flag which can be enabled to better trace your operation 
+
+    Next I invert the network inorder to DREAM. Lables in image out. This is a more colorful way of sharing your experience with others. 
+    
+    Have fun with it. 
+    With Love: Palafita
 
 """
 
@@ -320,7 +361,7 @@ class DNN:
 
         """
             The idea of backpropagation is that a networks loss from the perspective of a layer is not affected by previous layers. Because a net feeds forward
-            Therefore we use the chain rule to only process the loss in terms of the layer being looked at, not earlier layers. 
+            Therefore we use the chain rule to only process the loss in terms of the layer being looked at, not earlier layers. Treating all other layers as constant and the ith layer in terms of loss as a function of its weighted input and the the ith+1's gradient. 
             We backprogate because the chain rule goes from the outter functions in, and in until the variable is reached. Ie a specific layer
                 delta loss / weights_3 = delta loss / activation final * delta activation final / z final * delta z final / weights_3 where delta z final / weights_3 is expanded with the chain rule till d weights_3/d weights_3 is reached 
                 Notice that previous factors of the layers derivitive are allready known from earlier layers derivitives. 
@@ -340,7 +381,8 @@ class DNN:
                 Look at the proof to understand back propagation. This code is designed to run. Its hard to read because of its indexing used for induction
             The induction in back prop takes 2 steps before its recursive for partial loss in terms of weighted inputs. 
             For the loss in tems of the weights using the above partial as a component. The induction is recursive for all the the first and last layers. 
-
+        
+        In general, when finding gradients. Use the partial derivitive of a specific weight using rows and columns as indicies, then generalize into vector notation. 
         """
         
         #   TODO optimize by storing activated flows  
@@ -376,8 +418,7 @@ class DNN:
             # inter_layer_adjustment = normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
             # normalize_tensors(supervision_loss_in_terms_of_biases, biases=True, inter_layer_adjustments=inter_layer_adjustment) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
             normalize_tensors(total_loss_in_terms_of_weights)
-            normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
-
+            normalize_tensors(supervision_loss_in_terms_of_biases, biases=True) # Warning: If you place this before loss in terms of weights is called it will break because that changes dependencies in place
 
         return total_loss_in_terms_of_weights, supervision_loss_in_terms_of_biases
 
@@ -984,43 +1025,6 @@ class MNIST:
             
         return batch
 
-"""
-    Here we can load images to shelve, we can load them from csv
-    We can hone saved nets or build new ones with any shape. 
-        We can engage a lock so that transfer learning or any learning for that matter only improves performance on the esoteric desired data set. 
-            Note we never access the live feed for any reason other than to predict final sucess on unseen data. This is a law
-            Note: The lock mechanism used to prevent updating champ to a worse testing accuracy(not worse live feed accur) is inside undo dropout 
-    We have utility functions to print mosiacs of the data sets for debug. 
-        We can load small data sets for debug. To produce fast epochs in development
-    The ground work of polymorphic changes to loss functions is in place. As well as polymorphic changes to step size algorithms for mini batch gradient descent
-    A logger is enabeled though semi confusing
-        Esoteric referes to the small data set you transfer learn onto. Testing is a partion that is itself partioned for the lock. Though with fit to my data on testing is only one partition
-        If the data set is too small epoch prints are disabled. De declutter read out. 
-    Drop out is properly implemented using best practices
-    Regularization is added with hyperparameters able to be tuned. This will punish larger weights. 
-        Use the regulizer as a case study of how to simply add terms to the loss function. Examine that terms are independent of each other in calculus. Thus the simplicity
-        I use a threshold with the regulizer. If the weights are below the threshold. No penality. This avoids adding noise to the gradient with nominal weights. 
-    Hyper links are added showing proofs for gradient descent induction
-    Numerical stability
-        Besides the regulaizer punishing larger weights with exponetial punishment. We use several other, sometimes brilliant methods to achieve stablity 
-        Most notably. Examine the link to the proof in softmax
-            A method was developed that stabalizes softmax perfectly. Using algebra. Another representation of softmax is found that is equivalent and stable numerically 
-        I use simple division to scale input by the number of input parameters. 
-        The gradients are normalized. This makes layers with more magnitude have smaller steps 
-        Line search algorithm only generates step magnitude none zero if loss is improved. Then larger batch size is used sequentially inorder to minimize pointless steping. Finally the lock is turned on. Making only good steps in terms of testing possible. No matter the numerical processes    
-    Filter:
-        Static preproccesing of images was used. Not sure how much it helped. There were differences between my handwritting with my tech and the borrowed general data set
-        To go further in this direction a CNN should be adopted. Which I will return to one day I hope. 
-        
-    I reached a satisfactory point. However inorder to properly solve MNIST. A convolutional net is recommended. To maintain a dnn solution the next step is to 
-        Add more examples to the my handwritting train directory. Its clear that this will greatly improve accuracy. Examine the read out and add which ones are incorrect the most
-            Note that inside various image functions there is a test flag which can be enabled to better trace your operation 
-
-    Next I invert the network inorder to DREAM. Lables in image out. This is a more colorful way of sharing your experience with others. 
-    
-    Have fun with it. 
-    With Love: Palafita
-"""
 
 try_for_better_dnn = False
 
@@ -1044,9 +1048,10 @@ else:
         #   Boot code
         with shelve.open("persistance") as global_storage:
             global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all     
-        MNIST.boot(debug=False) 
+        MNIST.boot(debug=False) #   Debug to true will speed up development by using smaller datasets, now that we load data from shelve its way faster than loading from csv, so no need to use
 
     def change_data_set(esoteric=True):
+        #   Esoteric referes to transfer learning onto a small data set. ie finetunning 
         if esoteric:
             dnn_spawn.data.train_data = data.my_train
             dnn_spawn.data.train_supervision = data.my_train_supervision
@@ -1064,89 +1069,59 @@ else:
     
     if hone_champion:
         with shelve.open("persistance") as global_storage:
-            dnn_spawn = global_storage["champ dnn"]
-            dnn_spawn.data = copy.deepcopy( data )
-    else:    
-        neurons_per_layer = [420, 90, 20] # First layers neuron count. Second layer defined implicitly
+            dnn_spawn = global_storage["champ dnn"] # Load best known net
+            dnn_spawn.data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
+    else:  
+        #   Without honing we create a new net  
+        neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
         drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
         dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=copy.deepcopy(data))
-
-    if not hone_champion:
         #   Launch random net => train on general data to get ball park 
         dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)    
         change_data_set(esoteric=True)
         #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
         dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False)
         change_data_set(esoteric=False)
+        dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+        dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
     
     #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
-    #   Switch to giant free data set but put in lock 
+    #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
     dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    # dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    # dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
     
-
     change_data_set(esoteric=True)
-    #   Lastly we hone the model with 
+    #   Lastly we hone the model with esoteric data
     dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
-       
+
+
+
 """
-    Todo for dreaming. You must change the loss function to mean squared error. then change shape in init. Lastly you simply need to change the data.train to train. 
-"""
+    Change so you can store multiple nets and load different nets 
+    solve mnist with mse
+    make net polymorphic so you can change input and output size 
+    solve for mnist inverted 
+
+
+        Goals
+
+    train on labels to images then print 
     
-
-"""
-    Home stretch 
-        
-        train on labels to images then print 
-        
-        feed generator to classifierer and test accur 
-        
-        
-
-    DONE
-
-    add numerical gradients as in video for test.  This will test if your gradient is correct
-            https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
-
-
-"""
-
-
-"""
-    Optimization. Use memory in dnn and access it so no need to recall. self.flows not used enough 
+    feed generator to classifierer and test accur 
 
     Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize
 
-    Mini lecture:
-        Explain bias and how his solution created no need to change anything with bias
-            bias as a translation of the origin in feature space of layer
-        Feed forward as generalization, Feed backward as extrapolation, or dreaming 
-            Bi directional learning 
-        Goal: 
-            Jan starting school
-            Full Dnn
-            Hypothesis testing and thoery. Lets optimize batch size 
-            Data as a assest 
-            thought vectors and translation. One hot vector classification to thought vector classification
-            Memory short and long. brief modeling 
-                rnn review. 
-            Black Jack ok. Job interview had me do it. 
-                Dnn as ai
-                synthetic data set
-                include var for personality of player. risk aversion
-                    personality of user unknown to net. 
-                    memory needed inorder to case player and mesure player personality 
+    add numerical gradients as in video for test.  This will test if your gradient is correct
+        https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
+     
 
 
-DEAD CODE
 
-#   Mean squared error method
-        # loss_primed = self.loss_primed(self, batch, supervision) 
-        # self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-        # gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-        # gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
+   # Mean squared error method
+    loss_primed = self.loss_primed(self, batch, supervision) 
+    self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+    gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+    gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
 
-dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
+    dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 
 """
