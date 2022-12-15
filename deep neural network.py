@@ -52,16 +52,22 @@ import copy
 
     Neuro nets profit from outliers, unlike stats. We the brain learn better from outliers and so do they  
 
-    If the training loss goes to zero and the testing loss is above zero then increase batch size. As batch size goes to infinity it converges with the testing loss
+    If the training loss goes to zero and the testing loss is above zero then increase training sample size. As training sample size goes to infinity it converges with the testing loss
     You should always be able to fit to training perfectly no matter batch size or your nets wrong. 
-    From no training loss you need to increase the size of the data set, as well as mini batch size.
     As training set size goes to infinity, if training loss is zero, then the descrepency between training loss and testing loss will go to zero
-     
-    GPU with cupy speed up program 19x fold
 
-    TODO:
-        Step different lengths for each layers weights and biases. This would create a massively complex step. Notice the last layers have more magnitude in their gradients. thus they should have smaller steps
-            To find their lengths. do mesh search... hyperdimensional line search. Find values and store them in a array. Then decay the array over iterations and use a multinomial to select the weights from there. 
+    Inverse of network:
+        The feed forward direction of a network from large input to finish with small output or classification can be surmized as: Extrapolation => Generalization, if we invert the network we have: Generalization => Extrapolation
+        This shows the importance of bi-directional learning. We learn from our extrapolation, inorder to generalize. ie a finit state machine maybe
+
+    Optimization:   
+        GPU with cupy speed up the program 19x fold
+        TODO
+            multi thread the find step function 
+            launch x threads each iteration. Each thread finds its own gradient*step then returns to master thread. The average of these forms the next sequential gradient step. 
+            Below seems unneeded because the fitting is not that hard. The problem is closing the difference between train and test. A difference that appears to converge to zero with sample size
+                Step different lengths for each layers weights and biases. This would create a massively complex step. Notice the last layers have more magnitude in their gradients. thus they should have smaller steps
+                    To find their lengths. do mesh search... hyperdimensional line search. Find values and store them in a array. Then decay the array over iterations and use a multinomial to select the weights from there. 
 
 """
 
@@ -993,17 +999,17 @@ class MNIST:
     Drop out is properly implemented using best practices
     Regularization is added with hyperparameters able to be tuned. This will punish larger weights. 
         Use the regulizer as a case study of how to simply add terms to the loss function. Examine that terms are independent of each other in calculus. Thus the simplicity
-        Hyper links are added showing proofs for gradient descent induction
         I use a threshold with the regulizer. If the weights are below the threshold. No penality. This avoids adding noise to the gradient with nominal weights. 
+    Hyper links are added showing proofs for gradient descent induction
     Numerical stability
         Besides the regulaizer punishing larger weights with exponetial punishment. We use several other, sometimes brilliant methods to achieve stablity 
         Most notably. Examine the link to the proof in softmax
             A method was developed that stabalizes softmax perfectly. Using algebra. Another representation of softmax is found that is equivalent and stable numerically 
         I use simple division to scale input by the number of input parameters. 
-        The gradients are normalized 
-        Line search algorithm only generates step magnitude none zero if loss is improved. Then larger batch size is used sequentially inorder to minimize pointless steping. Finally the lock is turned on. Making only good steps possible. No matter the numerical processes    
+        The gradients are normalized. This makes layers with more magnitude have smaller steps 
+        Line search algorithm only generates step magnitude none zero if loss is improved. Then larger batch size is used sequentially inorder to minimize pointless steping. Finally the lock is turned on. Making only good steps in terms of testing possible. No matter the numerical processes    
     Filter:
-        Static preproccesing of images was used. Not sure how much it helped. There were differences between my handwritting with my tech and the borred general data set
+        Static preproccesing of images was used. Not sure how much it helped. There were differences between my handwritting with my tech and the borrowed general data set
         To go further in this direction a CNN should be adopted. Which I will return to one day I hope. 
         
     I reached a satisfactory point. However inorder to properly solve MNIST. A convolutional net is recommended. To maintain a dnn solution the next step is to 
