@@ -11,3 +11,7 @@
 'my test primed supervision', (1223571968, 2349)
 'live feed', (1241826816, 363966)
 'live feed supervision', (1242190848, 4829)
+'mnist dnn champ best accuracy', (1661574656, 188)
+'mnist dnn champ', (1661575168, 18620503)
+'mnist dnn categorical cross entropy best accuracy', (1680196096, 188)
+'mnist dnn categorical cross entropy', (1680196608, 18620523)

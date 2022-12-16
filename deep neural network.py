@@ -112,6 +112,8 @@ import copy
 
 """
 
+start_time = time.time() #  Global start time will allow global access
+
 class ACTIVATIONS:
 
     @staticmethod
@@ -205,7 +207,7 @@ class LOSS_FUNCTIONS:
         return gradients 
 
 class DNN:
-    def __init__(self, neurons_per_layer, drop_out_per_layer, data, \
+    def __init__(self, neurons_per_layer, drop_out_per_layer, data, name, \
             loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed],\
             hidden_layers_activation_and_prime=[ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed],\
             final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]):
@@ -233,7 +235,25 @@ class DNN:
                 biases.append( np.random.uniform(-1, 1, layer.shape[0]).reshape(layer.shape[0], 1)  / layer.shape[0] )
             return biases
 
-         #  Attach data set to DNN. You can switch data set at any time for transfer learning
+        """
+            Names are CONSTANTS, never change
+            Name dnn. The name will tell what kind of network it is. We infer many things from the name:
+            Which data set its tied to, its functionality, the shape of the outter layers, etc
+        
+            NAMES:
+            mnist dnn categorical cross entropy 
+                cat cross entropy loss
+                input 28**2, output 10
+            mnist dnn mean squared error 
+                mse loss
+                input 28**2, output 10 
+            dream mnist dnn mean squared error  
+                mse loss 
+                input 10, output 28**2
+        """
+        self.name = name
+
+        #  Attach data set to DNN. You can switch data set at any time for transfer learning
         self.data = data
 
         #   Store meta data
@@ -545,7 +565,7 @@ class DNN:
                     normalize_gradients_ = " using Normalized Gradients"
                 else: 
                     normalize_gradients_ = " not using Normalized Gradients"
-                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_)
+                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t" + self.name.upper() + "\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_ + " LOCK " + str(fit_to_my_data).upper())
                 print("\n\t\t\t\tNeurons per Layer: " + str(self.neurons_per_layer) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(self.drop_out_per_layer) + \
                     "\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
             elif message_type == "epoch":
@@ -643,16 +663,16 @@ class DNN:
                 #   If this is the best net yet then store it
                 with shelve.open("persistance") as global_storage: #    This will sync storage and close connection at end
                     test_accuracy = self.get_accuracy(semi_test_batch, semi_test_batch_supervision)
-                    if test_accuracy > global_storage["best accuracy"]:      
-                        improvement_percentage = np.round((test_accuracy/global_storage["best accuracy"] - 1)*100, 2)
+                    if test_accuracy > global_storage[self.name + " best accuracy"]:      
+                        improvement_percentage = np.round((test_accuracy/global_storage[self.name + " best accuracy"] - 1)*100, 2)
                         print("\nA Greater Champion has Emerged !!")
-                        print("Previous semi test accuracy was: " + str(np.round(global_storage["best accuracy"], 2)) + " improved to: " + str(np.round(test_accuracy, 2)) + "\n\t" + str(improvement_percentage) + "% Improvment")
-                        global_storage["best accuracy"] = test_accuracy
+                        print("Previous semi test accuracy was: " + str(np.round(global_storage[self.name + " best accuracy"], 2)) + " improved to: " + str(np.round(test_accuracy, 2)) + "\n\t" + str(improvement_percentage) + "% Improvment")
+                        global_storage[self.name + " best accuracy"] = test_accuracy
                         data_temp = copy.deepcopy( self.data )
                         self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
                         self.data.test_supervision, self.data.train_supervision = None, None 
                         
-                        global_storage["champ dnn"] = self
+                        global_storage[self.name] = self
                         self.data = data_temp # Ready up, so dnn can continue training 
                         #global_storage.sync()
 
@@ -673,25 +693,16 @@ class DNN:
             test_batch = self.data.test_data[:, 0:test_sample_size]
             test_batch_supervision = self.data.test_supervision[:, 0:test_sample_size]
         
-
-
-        #   Semi test is used for transfer learning. We insure that any changes help target data set and not just the massive data set used for boot
-        # semi_test_batches = self.data.test_data[:, test_sample_size:]
-        # semi_test_batches_supervision = self.data.test_supervision[:, test_sample_size:]
-        # use_semi_test = False
-        # semi_batch_size = 128 # Must be smaller than data. I set this as constant so it never is too large. Because the testing data is smaller than train
-        # probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out
- 
         semi_test_batch = self.data.my_test
         semi_test_batch_supervision = self.data.my_test_supervision
         use_semi_test = False
         
-        probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out per epoch
+        probability_of_printing_readout_per_iter = 1000 # 1 in 1000 chance of print out per iteration
         normalize_gradients = True
         
         #   Parabolic function vars
         step_reset = .6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
-        step_bounds = (0, 1) #    Arbitrary value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_bounds = (0, 1) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
@@ -700,14 +711,10 @@ class DNN:
         read_out("init")
         for epoch in range(epochs_limit): 
             inter_epoch_iteration = 0
-            # if batch_size < 1000: # Once you are past 1000 size batch size. Only change weights if they improve on testing data. 
-            #     use_semi_test = False
-            # else: 
-            #     use_semi_test = True
-            #     semi_batch_size = 450 # At this point we should just test on the whole semi partition. But I didnt want to recode. Before we reduced size for fast early fitting
             if fit_to_my_data: use_semi_test = True
-            if epochs_limit < 3: # keep from congesting terminal
-                read_out("epoch") 
+            #if epochs_limit <= 3: # keep from congesting terminal
+                #read_out("epoch")
+            read_out("epoch") 
             for i in np.random.permutation(np.arange(self.data.train_data.shape[1]-batch_size)): 
                 """
                     i = batch iteration
@@ -725,12 +732,7 @@ class DNN:
                 #   We build the gradient from the training data
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
-                
-                #   I probe potential steps of the gradient to add to the net with a partition of the testing data. This insures steps always generalize to unseen data and are not overfitting the net to training data 
-                #semi_batch_i = np.random.randint(0, semi_test_batches.shape[1] - semi_batch_size)
-                #semi_test_batch = semi_test_batches[:, semi_batch_i:semi_batch_i + semi_batch_size]
-                #semi_test_batch_supervision = semi_test_batches_supervision[:, semi_batch_i:semi_batch_i + semi_batch_size]                
-
+              
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
 
@@ -746,7 +748,7 @@ class DNN:
                 #   Perform Mini Batch Gradient Descent
                 for layer in range(len(layers_gradients)):
                     self.layers[layer] -= step_size_weights * layers_gradients[layer]
-                    self.biases[layer] -= step_size_biases *  bias_gradients[layer]#np.average(bias_gradients[layer], axis=1)[:, np.newaxis]
+                    self.biases[layer] -= step_size_biases *  bias_gradients[layer]
 
                 #   Update the bufferes with the new trained weights
                 update_buffers()
@@ -799,6 +801,9 @@ class DNN:
         print("\nClassification of live Feed was: \n\tAccuracy was: " + accuracy + "%")
         print( "\nAttempted Classifications for your batch were: " + str(classifications))
         print(   "Correct Classifications would be:              " + str(labels))
+
+    def load_data_set(self):
+        pass
 
 class MNIST:
 
@@ -1025,75 +1030,109 @@ class MNIST:
             
         return batch
 
+class Main:
 
-try_for_better_dnn = False
-
-if not try_for_better_dnn:
-    data = MNIST()
-    #data.show_elements("train")
-    #data.show_elements("test")
-    #data.show_elements("my train") 
-    #data.show_elements("my test") 
-    data.show_elements("live feed") 
-    with shelve.open("persistance") as global_storage:
-        champ_dnn = global_storage["champ dnn"]
-
-    champ_dnn.classify_images()
-
-else:
-    step_algorithm = "parabola"
-    start_time = time.time() #  Global start time will allow global access
-    
-    def boot():
-        #   Boot code
+    @staticmethod
+    def test_champ(champ_name="mnist dnn categorical cross entropy", visualize_data__set=False):
+        if visualize_data__set:
+            #   Sample elements of data set with mosiac representations
+            if "mnist" in champ_name:
+                data = MNIST()
+            data.show_elements("train")
+            data.show_elements("test")
+            data.show_elements("my train") 
+            data.show_elements("my test") 
+            data.show_elements("live feed") 
         with shelve.open("persistance") as global_storage:
-            global_storage["best accuracy"] = 0 #   Use the first time you run. Or any time you want to restart all     
-        MNIST.boot(debug=False) #   Debug to true will speed up development by using smaller datasets, now that we load data from shelve its way faster than loading from csv, so no need to use
+            champ_dnn = global_storage[champ_name]
+        if "mnist" in champ_name and "dream" in champ_name:
+            champ_dnn.dream_images()
+        elif "mnist" in champ_name:
+            champ_dnn.classify_images()
 
-    def change_data_set(esoteric=True):
-        #   Esoteric referes to transfer learning onto a small data set. ie finetunning 
-        if esoteric:
-            dnn_spawn.data.train_data = data.my_train
-            dnn_spawn.data.train_supervision = data.my_train_supervision
-            dnn_spawn.data.test_data = data.my_test
-            dnn_spawn.data.test_supervision = data.my_test_supervision    
-        else:
-            dnn_spawn.data.train_data = data.train_data
-            dnn_spawn.data.train_supervision = data.train_supervision
-            dnn_spawn.data.test_data = data.test_data
-            dnn_spawn.data.test_supervision = data.test_supervision
+    @staticmethod
+    def hone_champ(champ_name="mnist dnn categorical cross entropy", restart=(False, False), new_architecture=False):
+        """
+            Use this function to initialize and train nets, or to hone existing nets through additional training 
+            Champ name is constant for each application. Look inside constructor of DNN for table of names available. 
+            Restart arg 1 says to zero out the score so new nets are always found, second arg is to reload the data base from csv to shelve
+            new architecture is a dictionary with number of neurons per hidden layer as well as thier drop out, if false than the champ is loaded and honed
+            The lock mechanism will ensure that all changes improve the testing data. We get the gradient from the training data always but check to make sure the testing is improved before step.
+        """
 
-    #boot() #    Only call to erase champ dnn and reload data from images and csv
-    hone_champion = True
-    data = MNIST() #    Load data for supervised learning of spawns
-    
-    if hone_champion:
-        with shelve.open("persistance") as global_storage:
-            dnn_spawn = global_storage["champ dnn"] # Load best known net
-            dnn_spawn.data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
-    else:  
-        #   Without honing we create a new net  
-        neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-        drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-        dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=copy.deepcopy(data))
-        #   Launch random net => train on general data to get ball park 
-        dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm)    
+        step_algorithm = "parabola"    #    Algorithm used to determine step size in gradient decent  
+        
+        def boot(restart_data_set=False):
+            #   Boot code
+            with shelve.open("persistance") as global_storage:
+                #   Set the performance of Champ to zero. Then, you will overwrite the champ with any perforamce better than zero.
+                global_storage[champ_name + " best accuracy"] = 0     
+                print("ZEROED " + champ_name + " accuracy") 
+            if restart_data_set:
+                #   This will reload the data from csv into shelves
+                MNIST.boot(debug=False) #   Debug to true will speed up development by using smaller datasets
+                print("RELOADED DATASET FROM CSV. USING DWARFED DATASET: " + str(False))
+
+        def change_data_set(esoteric=True):
+            #   TODO, this should be moved into DNN and automated with only flags changed 
+            if esoteric:
+                print("SWITCHED TO ESOTERIC DATA SET")
+            else:
+                print("SWITCHED TO NON-ESOTERIC DATA SET")
+            #   Esoteric referes to transfer learning onto a small data set. ie fine tunning 
+            if esoteric:
+                dnn_spawn.data.train_data = data.my_train
+                dnn_spawn.data.train_supervision = data.my_train_supervision
+                dnn_spawn.data.test_data = data.my_test
+                dnn_spawn.data.test_supervision = data.my_test_supervision    
+            else:
+                dnn_spawn.data.train_data = data.train_data
+                dnn_spawn.data.train_supervision = data.train_supervision
+                dnn_spawn.data.test_data = data.test_data
+                dnn_spawn.data.test_supervision = data.test_supervision
+
+        if restart[0]:
+            boot(restart[1]) #    Call to restart champ competition by setting score to 0. Also can reload data from images and csv to shelve 
+            
+        if "mnist" in champ_name:
+            data = MNIST() #    We load data to function scope so we can switch data sets back and forth for fine tuning. Each time changing the test/train of dnn  
+        
+        if new_architecture is False:
+            with shelve.open("persistance") as global_storage:
+                dnn_spawn = global_storage[champ_name] # Load best known net
+                dnn_spawn.data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
+        else:  
+            #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
+            
+            neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+            drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=copy.deepcopy(data), name=champ_name)
+            #   Launch random net => train on general data to get ball park 
+            #dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
+            change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
+            dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=True) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
+            change_data_set(esoteric=False)
+            
+        #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
+        #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
+        dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+        
         change_data_set(esoteric=True)
-        #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
-        dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False)
-        change_data_set(esoteric=False)
-        dnn_spawn.fit(batch_size=128, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-        dnn_spawn.fit(batch_size=256, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    
-    #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
-    #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
-    dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-    
-    change_data_set(esoteric=True)
-    #   Lastly we hone the model with esoteric data
-    dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
+        #   Lastly we hone the model with esoteric data
+        dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
+        return dnn_spawn
 
 
+#neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+#drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+#new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
+#Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
+
+
+Main.hone_champ("mnist dnn categorical cross entropy")
+Main.test_champ("mnist dnn categorical cross entropy")
+
+        
 
 """
     Change so you can store multiple nets and load different nets 
@@ -1113,6 +1152,12 @@ else:
     add numerical gradients as in video for test.  This will test if your gradient is correct
         https://www.youtube.com/watch?v=pHMzNW8Agq4&list=PLiaHhY2iBX9hdHaRr6b7XevZtgZRa1PoU&index=5
      
+    use a profiler to see program flow
+
+    add serilize method to base class dnn so that dnn is lighter. Save the weights to a text file. With scientific notation and compress
+
+    add a simple logger class 
+        add line method. it adds line to str then print that line. So we can store log
 
 
 
