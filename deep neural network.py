@@ -207,7 +207,7 @@ class LOSS_FUNCTIONS:
         return gradients 
 
 class DNN:
-    def __init__(self, neurons_per_layer, drop_out_per_layer, data, name, \
+    def __init__(self, neurons_per_layer, drop_out_per_layer, name, \
             loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed],\
             hidden_layers_activation_and_prime=[ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed],\
             final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]):
@@ -254,7 +254,7 @@ class DNN:
         self.name = name
 
         #  Attach data set to DNN. You can switch data set at any time for transfer learning
-        self.data = data
+        self.load_data_set() #  Data set is infered with dnn name
 
         #   Store meta data
         self.neurons_per_layer, self.drop_out_per_layer = neurons_per_layer, drop_out_per_layer
@@ -276,12 +276,12 @@ class DNN:
         self.kept_weights = None # Used to revert from dropout 
 
         #   Initialize all layers weights as np objects with the shapes as given from neurons per layer
-        input_layer = initialize_layer(neurons_per_layer[0], data.train_data.shape[0]) #  Plus one is for bias
+        input_layer = initialize_layer(neurons_per_layer[0], self.data.train_data.shape[0]) #  Plus one is for bias
         layers = [input_layer]
         for i, neural_count in enumerate(neurons_per_layer[1:]): #  Hidden layers 
             layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
         #   Init the final layer. It conforms its shape entirely and is not programable
-        layers.append(initialize_layer(data.train_supervision.shape[0], neurons_per_layer[-1]))
+        layers.append(initialize_layer(self.data.train_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
         
         #   Data storage for layers outputs and input data as first flow, ie output of nothing
@@ -671,10 +671,10 @@ class DNN:
                         data_temp = copy.deepcopy( self.data )
                         self.data.test_data, self.data.train_data = None, None #  We remove the data set from the storage. So that dnn can port way more lightly. We need the de normalize to work though
                         self.data.test_supervision, self.data.train_supervision = None, None 
-                        
+                        self.data.buffered_self = None #    We dont just None the data so we can store its helper functions for use in live feed. Though they are uneeded at time of writting
                         global_storage[self.name] = self
                         self.data = data_temp # Ready up, so dnn can continue training 
-                        #global_storage.sync()
+                        #global_storage.sync() # syncing is done implicitly with with statement 
 
             #   Log full nets performance and fitting time
             read_out("final")       
@@ -803,7 +803,10 @@ class DNN:
         print(   "Correct Classifications would be:              " + str(labels))
 
     def load_data_set(self):
-        pass
+        if "mnist" in self.name and "dream" in self.name:
+            self.data = MNIST().invert_data_set()     
+        elif "mnist" in self.name:
+            self.data = MNIST()
 
 class MNIST:
 
@@ -819,12 +822,14 @@ class MNIST:
             self.my_test_supervision = global_storage["my test primed supervision"]
             self.live_feed = global_storage["live feed"]
             self.live_feed_supervision = global_storage["live feed supervision"]
+        self.buffered_self = copy.copy(self) #copy.deepcopy(self)
 
     @staticmethod
     def boot(debug=False) -> None:
         #   Load data set from csv => preprocess it => then save it to shelve for fast recall
 
         def initialize_normalizer():
+            #Dead code  I do not normalize. Different hardware can be used to write the dataset. Making the press of the pen different. Dont learn from gray scale hardware speficic. Use black OR white for less variance 
             active_pixels = self.train_data != 0
             self.std = np.std(self.train_data[active_pixels])
             self.average = np.average(self.train_data[active_pixels])
@@ -972,6 +977,30 @@ class MNIST:
         tensor[active_pixels] = ((tensor[active_pixels] * tensor.shape[0] * self.std) + self.average).astype(np.uint8)
         return tensor
 
+    def invert_data_set(self):
+        #   We use this for inverted networks. For example we can dream images from labels etc.
+        temp = (self.train_data, self.test_data, self.my_train, self.my_test, self.live_feed)
+        self.train_data, self.test_data, self.my_train, self.my_test, self.live_feed = self.train_supervision, self.test_supervision, self.my_train_supervision, self.my_test_supervision, self.live_feed_supervision
+        self.train_supervision, self.test_supervision, self.my_train_supervision, self.my_test_supervision, self.live_feed_supervision = temp
+        return self
+
+    def change_data_set(self, esoteric=True):
+        if esoteric:
+            print("\n\nSWITCHED TO ESOTERIC DATA SET")
+        else:
+            print("\n\nSWITCHED TO NON-ESOTERIC DATA SET")
+        #   Esoteric referes to transfer learning onto a small data set. ie fine tunning 
+        if esoteric:
+            self.train_data = self.my_train
+            self.train_supervision = self.my_train_supervision
+            self.test_data = self.my_test
+            self.test_supervision = self.my_test_supervision    
+        else:
+            self.train_data = self.buffered_self.train_data
+            self.train_supervision = self.buffered_self.train_supervision
+            self.test_data = self.buffered_self.test_data
+            self.test_supervision = self.buffered_self.test_supervision
+
     @staticmethod
     def black_and_white(tensor, white_and_black=True):
         if white_and_black:
@@ -979,9 +1008,9 @@ class MNIST:
             tensor_ = np.zeros_like(tensor, dtype=float)
             active = tensor != 255
             tensor_[active] = 1 / tensor.shape[0]
-            tensor_[np.logical_not(active)] = 0
+            tensor_[np.logical_not(active)] = 0 # extraneous ? 
             return tensor_
-        else:
+        else: # black on white off
             tensor_ = np.zeros_like(tensor, dtype=float)
             active = tensor != 0
             tensor_[active] = 1 / tensor.shape[0]
@@ -1036,7 +1065,7 @@ class Main:
     def test_champ(champ_name="mnist dnn categorical cross entropy", visualize_data__set=False):
         if visualize_data__set:
             #   Sample elements of data set with mosiac representations
-            if "mnist" in champ_name:
+            if "mnist" in champ_name: # dream and classifiy mnist use the same dataset just inverted. 
                 data = MNIST()
             data.show_elements("train")
             data.show_elements("test")
@@ -1067,75 +1096,50 @@ class Main:
             with shelve.open("persistance") as global_storage:
                 #   Set the performance of Champ to zero. Then, you will overwrite the champ with any perforamce better than zero.
                 global_storage[champ_name + " best accuracy"] = 0     
-                print("ZEROED " + champ_name + " accuracy") 
+                print("\n\nZEROED " + champ_name + " accuracy") 
             if restart_data_set:
                 #   This will reload the data from csv into shelves
                 MNIST.boot(debug=False) #   Debug to true will speed up development by using smaller datasets
-                print("RELOADED DATASET FROM CSV. USING DWARFED DATASET: " + str(False))
-
-        def change_data_set(esoteric=True):
-            #   TODO, this should be moved into DNN and automated with only flags changed 
-            if esoteric:
-                print("SWITCHED TO ESOTERIC DATA SET")
-            else:
-                print("SWITCHED TO NON-ESOTERIC DATA SET")
-            #   Esoteric referes to transfer learning onto a small data set. ie fine tunning 
-            if esoteric:
-                dnn_spawn.data.train_data = data.my_train
-                dnn_spawn.data.train_supervision = data.my_train_supervision
-                dnn_spawn.data.test_data = data.my_test
-                dnn_spawn.data.test_supervision = data.my_test_supervision    
-            else:
-                dnn_spawn.data.train_data = data.train_data
-                dnn_spawn.data.train_supervision = data.train_supervision
-                dnn_spawn.data.test_data = data.test_data
-                dnn_spawn.data.test_supervision = data.test_supervision
+                print("\n\nRELOADED DATASET FROM CSV. USING DWARFED DEBUG DATASET: " + str(False))
 
         if restart[0]:
             boot(restart[1]) #    Call to restart champ competition by setting score to 0. Also can reload data from images and csv to shelve 
             
-        if "mnist" in champ_name:
-            data = MNIST() #    We load data to function scope so we can switch data sets back and forth for fine tuning. Each time changing the test/train of dnn  
-        
         if new_architecture is False:
             with shelve.open("persistance") as global_storage:
                 dnn_spawn = global_storage[champ_name] # Load best known net
-                dnn_spawn.data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
-        else:  
-            #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
-            
+                dnn_spawn.load_data_set()#data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
+        else:  #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
             neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, data=copy.deepcopy(data), name=champ_name)
+            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name)
             #   Launch random net => train on general data to get ball park 
             #dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
-            change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
+            dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
             dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=True) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
-            change_data_set(esoteric=False)
+            dnn_spawn.data.change_data_set(esoteric=False)
             
         #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
         #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
         dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
         
-        change_data_set(esoteric=True)
+        dnn_spawn.data.change_data_set(esoteric=True)
         #   Lastly we hone the model with esoteric data
         dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
         return dnn_spawn
 
 
-#neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-#drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-#new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
-#Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
+# neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+# drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+# new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
+# Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
 
-
-Main.hone_champ("mnist dnn categorical cross entropy")
+#Main.hone_champ("mnist dnn categorical cross entropy")
 Main.test_champ("mnist dnn categorical cross entropy")
 
         
 
 """
-    Change so you can store multiple nets and load different nets 
     solve mnist with mse
     make net polymorphic so you can change input and output size 
     solve for mnist inverted 
