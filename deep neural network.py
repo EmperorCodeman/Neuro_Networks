@@ -1105,37 +1105,36 @@ class Main:
         if restart[0]:
             boot(restart[1]) #    Call to restart champ competition by setting score to 0. Also can reload data from images and csv to shelve 
             
-        if new_architecture is False:
+        if new_architecture is False: # Load champ and Hone it
             with shelve.open("persistance") as global_storage:
                 dnn_spawn = global_storage[champ_name] # Load best known net
-                dnn_spawn.load_data_set()#data = copy.deepcopy( data )  #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
+                dnn_spawn.load_data_set() #   We do not persist the nets data set with it. This is so when we port trained ai it will be light. Here we load its data set so that it can be honed
         else:  #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
             neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
             dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name)
-            #   Launch random net => train on general data to get ball park 
-            #dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
+            #   Launch random net => train on general data to get ball park then esoteric. All without the lock
+            dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
             dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
-            dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=True) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
+            dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
             dnn_spawn.data.change_data_set(esoteric=False)
             
         #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
         #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
         dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-        
         dnn_spawn.data.change_data_set(esoteric=True)
         #   Lastly we hone the model with esoteric data
         dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
         return dnn_spawn
 
 
-# neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-# drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-# new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
-# Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
+neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
+Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
 
 #Main.hone_champ("mnist dnn categorical cross entropy")
-Main.test_champ("mnist dnn categorical cross entropy")
+#Main.test_champ("mnist dnn categorical cross entropy")
 
         
 
