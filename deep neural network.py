@@ -573,11 +573,11 @@ class DNN:
             elif message_type == "progress":
                 loss = self.get_loss(self, batch, batch_supervision)
                 test_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision) 
-                if loss < 0.01: 
-                    nonlocal use_semi_test
-                    if not use_semi_test:
-                        use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
-                        print("\n\nUsing Semi test now\n")
+                # if loss < 0.01: 
+                #     nonlocal use_semi_test
+                #     if not use_semi_test:
+                #         use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
+                #         print("\n\nUsing Semi test now\n")
                 test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 if fit_to_my_data:
                     testing_accuracy_label = "Esoteric Testing Accuracy: "
