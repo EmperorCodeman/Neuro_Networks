@@ -136,7 +136,7 @@ class ACTIVATIONS:
         dendritic_input -= dendritic_input.max(axis=0) #  out is [0, -inf] This insures that the denominator of softmax never equals 0. 
         e_to_x = np.exp(dendritic_input)
         e_to_x = e_to_x / np.sum(e_to_x, axis=0)
-        return e_to_x # todo move return up so no rewrite to e to x in memory optimizationS
+        return e_to_x
 
     @staticmethod
     def softmax_primed(dendritic_input):
@@ -170,6 +170,7 @@ class LOSS_FUNCTIONS:
 
     @staticmethod
     def cross_entropy(dnn, batch, supervision):
+        #   WARNING: In a confusing way. I made this the complete loss function. Notice the regularizer is added here. TODO organize this so its the loss of supervision only 
         #   Cross entropy requires inputs as probabilities. No negatives allowed
         #   Google cross entropy for its theory
         supervision = supervision == 1
@@ -180,8 +181,10 @@ class LOSS_FUNCTIONS:
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
         #   WARNING: This is the prime of the superivison loss only. The full loss requires other terms primes like regulizer
-        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z 
+        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z   Other terms of to average loss over batch and weigh loss in terms of supervision in contrast with other terms like the regulizer
+        # TODO no need to feed forward again   
         return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.feed_forward(batch) - supervision)  
+
 
     @staticmethod
     def regularize_weights(dnn):
@@ -194,14 +197,15 @@ class LOSS_FUNCTIONS:
 
     @staticmethod
     def regularize_weights_primed(dnn):
-        #   This is the rate of change of the regulizer term in terms of the weights. Not final z. Seperate from backprogation 
+        #   This returns the rate of change of the regulizer term in terms of the weights. Not final z. Seperate from backprogation 
+        COEFF = (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size)
+    
         gradients = [] 
         for layer in dnn.layers:
             gradient = np.zeros_like(layer)
             weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold
             gradient[weights_too_large] = layer[weights_too_large]
-            coeff = (LOSS_FUNCTIONS.normality_importance*LOSS_FUNCTIONS.regulizer_exponential/dnn.network_size)
-            gradient[weights_too_large] = coeff * (gradient[weights_too_large]**(LOSS_FUNCTIONS.regulizer_exponential-1))
+            gradient[weights_too_large] = COEFF * (gradient[weights_too_large]**(LOSS_FUNCTIONS.regulizer_exponential-1))
             gradients.append( gradient )  
         
         return gradients 
@@ -405,35 +409,29 @@ class DNN:
         In general, when finding gradients. Use the partial derivitive of a specific weight using rows and columns as indicies, then generalize into vector notation. 
         """
         
-        #   TODO optimize by storing activated flows  
+        #   TODO optimize by storing activated flows. not very effective 
 
         #   Forward Propagate flows 
-        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+        self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs and batch to self
         
         #   Backpropagate Loss in terms of flows
         loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
-        supervision_loss_in_terms_of_activations = [None] * len(self.layers)
-        supervision_loss_in_terms_of_activations[-1] = loss_in_terms_of_z_final # First step of induction is done by hand. 
-        supervision_loss_in_terms_of_activations[-2] = self.layers[-1].transpose() @ supervision_loss_in_terms_of_activations[-1] # Second step uses the proof that combines delta cross entropy with delta softmax. They are factors of each other by the chain rule   
-        for layer in reversed( range(len(self.layers)-2) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
-            supervision_loss_in_terms_of_activations[layer] = self.layers[layer+1].transpose() @ ( self.hidden_activation_primed(self.flows[layer+2]) * supervision_loss_in_terms_of_activations[layer+1] ) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
+        supervision_loss_in_terms_of_preactivation = [None] * len(self.layers)
+        supervision_loss_in_terms_of_preactivation[-1] = loss_in_terms_of_z_final # First step of induction is done by hand then chained to form later steps.  
+        for layer in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
+            supervision_loss_in_terms_of_preactivation[layer] = ( self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_preactivation[layer+1] ) * self.hidden_activation_primed(self.flows[layer+1]) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
         
-        #   Loss in terms of a layers weights. Think of this as loss in terms of activations for the layer times its input and output. out_transpose * delta @ in_transpose
+        #   This section appears to be invariant of loss function.
+        #   Loss in terms of a layers weights. Think of this as loss in terms of pre-activations for the layer times the weights coefficient. 
         supervision_loss_in_terms_of_weights = [None]*len(self.layers) # Each index is its respective layers partials
-        supervision_loss_in_terms_of_weights[0] = (self.hidden_activation_primed(self.flows[1]) * supervision_loss_in_terms_of_activations[0]) @ self.flows[0].transpose() #  First layer is not inductive because the input is not activated. its the data set
-        for layer, supervision_loss_in_terms_of_activation in enumerate(supervision_loss_in_terms_of_activations[1:-1]):  
-            layer += 1 #    First layer skipped
-            supervision_loss_in_terms_of_weights[layer] = (self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer]) @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers    
-        supervision_loss_in_terms_of_weights[-1] = supervision_loss_in_terms_of_activations[-1] @ self.hidden_activation( self.flows[-2].transpose() )  
+        supervision_loss_in_terms_of_weights[0] = supervision_loss_in_terms_of_preactivation[0] @ batch.transpose() #  First layer is not inductive because the input is not activated. its the data set
+        for layer in range(1, len(supervision_loss_in_terms_of_preactivation)):  
+            supervision_loss_in_terms_of_weights[layer] = supervision_loss_in_terms_of_preactivation[layer] @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers    
 
         regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(self) # Do not normalize. This is a term of the loss
         total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )] #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
+        supervision_loss_in_terms_of_biases = supervision_loss_in_terms_of_preactivation
 
-        supervision_loss_in_terms_of_biases = [None] * len(self.layers)
-        supervision_loss_in_terms_of_biases[-1] = supervision_loss_in_terms_of_activations[-1] #  Not inductive yet because of derivitive of loss and chain to derivitive of final activation 
-        for layer, supervision_loss_in_terms_of_flow in enumerate(supervision_loss_in_terms_of_activations[:-1]): #   Last layer already done
-            supervision_loss_in_terms_of_biases[layer] = self.hidden_activation_primed(self.flows[layer+1]) * supervision_loss_in_terms_of_activations[layer] #   Loss in terms of bias is just the rate of change of loss in terms of the flow the biase addes to. Because bias just adds to to the flow linearly. Using the chain rule we get to loss in terms of flow from loss in terms of activation which is its outter function. 
-        
         if normalize: #   We can now normalize the full gradients in place in terms of each layer.   
             # inter_layer_adjustment = normalize_tensors(total_loss_in_terms_of_weights) #   Early layers have less magnitude, last layer the most. Normalizing will up the first layers and down the last
             # normalize_tensors(supervision_loss_in_terms_of_biases, biases=True, inter_layer_adjustments=inter_layer_adjustment) # Warning: If you place this before loss in terms of flows is used it will break because that changes dependent the input in place
@@ -485,6 +483,7 @@ class DNN:
         def line_search_parabola():
             """   
                 Now we do a line search inorder to find a productive step size for the gradient descent. 
+                Note that step size is relative to the gradient. Its the coefficient. Thus a non normalized gradient with a small step size would be a bigger step than a large step with a normalized gradient
                 F(step size) = change in loss from last epoch due to step size 
                     We want to find the minumum. Where negative change is good. B - A                        
                     We know that the change in loss for 0 step size is 0.
@@ -495,7 +494,9 @@ class DNN:
                         We loop with our exit condition being finding a negative value of F(step size). 
                     Lastly we step 1.5 times the magnitude of known productive step. 
                     This gives [0, known_neg_step, 1.5*known_neg_step] as our parabola points
-
+                    Lastly the parabala steps list becomes 
+                         [0, known_neg_step, 1.5*known_neg_step, parabals_vertex_as_step]
+                    Testing showed that the parabala is helping
             """
             
             if use_semi_test:
@@ -540,6 +541,7 @@ class DNN:
                     parabala_points_x.append(parabala_step)
                     parabala_points_y.append(delta_loss_parabala)
                     parabala_points_loss.append(parabala_loss)
+                
                 best_step_index = np_.array([parabala_points_y]).argmin()
 
             if parabala_points_x[best_step_index] == 0: 
@@ -548,11 +550,9 @@ class DNN:
             #   Finalize Step and prepair for next iteration
             best_known_step = parabala_points_x[best_step_index] 
             last_step = best_known_step
-            #last_loss = parabala_points_loss[best_step_index]
-            #self.layers = [buffered_network[i] - best_known_step*layers_gradient for i, layers_gradient in enumerate(layers_gradients)]
             self.layers = buffered_network
             self.biases = buffered_biases
-            return last_step, last_step#.0001*last_step
+            return last_step, last_step
             
         def static_steps():
             #    Step a portion of the normal gradient. Note. In a uniform dist, the scale of elements is changed by 1/size. Thus you might vanish. 
@@ -702,7 +702,7 @@ class DNN:
         
         #   Parabolic function vars
         step_reset = .6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
-        step_bounds = (0, 1) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_bounds = (-10, 10) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
@@ -1131,8 +1131,8 @@ class Main:
 neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
 drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
-Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
-
+# Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
+Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architecture, restart=(True, False))
 #Main.hone_champ("mnist dnn categorical cross entropy")
 #Main.test_champ("mnist dnn categorical cross entropy")
 
@@ -1140,14 +1140,24 @@ Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_arch
 
 """
     solve mnist with mse
+
+        attempt gradient with mse
+        if it doesnt work read how to do it
+        finish up mse 
+        add network arch to its name. mse can have many archs etc  
+            optimize gradient funcition with cross entropy. 
+        cross primed and cross should use stored flows not feed forward themselfeves.
+        switch to loss in terms of z instead of activation. This will make it so you dont recalulate it with bias. as well as increase readablity with chain rule
+        change away from flows having the batch as flow 0. inside gradient create a temp vars or whatever but dont spend too much time. Make it readable then move forward 
+        The step size should be unbounded, issue is the net getting stuck zeroed
+
+
     make net polymorphic so you can change input and output size 
     solve for mnist inverted 
 
 
         Goals
 
-    train on labels to images then print 
-    
     feed generator to classifierer and test accur 
 
     Include a classification neuron for unclassified so that the net is not forced to classify stuff it cannot recognize
@@ -1162,7 +1172,8 @@ Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_arch
     add a simple logger class 
         add line method. it adds line to str then print that line. So we can store log
 
-
+    Optimizations:
+       
 
    # Mean squared error method
     loss_primed = self.loss_primed(self, batch, supervision) 
