@@ -173,6 +173,7 @@ class LOSS_FUNCTIONS:
         #   WARNING: In a confusing way. I made this the complete loss function. Notice the regularizer is added here. TODO organize this so its the loss of supervision only 
         #   Cross entropy requires inputs as probabilities. No negatives allowed
         #   Google cross entropy for its theory
+        #   Do not use stored flows for this, because the dnn will change perspectively when trying to find ideal step size. Thus the flows are not constant throughout the iteration
         supervision = supervision == 1
         accuracy_loss = (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * np.sum(-np.log(dnn.feed_forward(batch)[supervision])) 
         normality_loss = LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn)
@@ -182,9 +183,8 @@ class LOSS_FUNCTIONS:
     def cross_entropy_primed(dnn, batch, supervision):
         #   WARNING: This is the prime of the superivison loss only. The full loss requires other terms primes like regulizer
         #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z   Other terms of to average loss over batch and weigh loss in terms of supervision in contrast with other terms like the regulizer
-        # TODO no need to feed forward again   
-        return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.feed_forward(batch) - supervision)  
-
+        #return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.feed_forward(batch) - supervision)  
+        return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.activated_flows[-1] - supervision)  
 
     @staticmethod
     def regularize_weights(dnn):
@@ -288,8 +288,9 @@ class DNN:
         layers.append(initialize_layer(self.data.train_supervision.shape[0], neurons_per_layer[-1]))
         self.layers = layers
         
-        #   Data storage for layers outputs and input data as first flow, ie output of nothing
-        self.flows = [None] * (len(layers)+1)
+        #   Data storage for layers outputs 
+        self.flows = [None] * len(layers)
+        self.activated_flows = [None] * len(layers)
 
         #   Store number of weights of network
         self.network_size = np.sum(np.array([layer.size for layer in layers]))
@@ -311,25 +312,26 @@ class DNN:
     def feed_forward(self, input, forward_propagating=False):   
         #   Parse independent vars, ie observation into the networks first layer and process activation func if network has hidden layers 
         if forward_propagating:
-            self.flows[0] = input #  I think of the input as just another part of the flow. This simplifies induction
             #   Save each output per layer for backpropagating. optimization 
             if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.  
-                self.flows[1] = self.layers[0] @ input + self.biases[0] #    Backpropagation uses the weighted input unactivated
-                flow = self.hidden_activation( self.flows[1] )
-            else:
-                self.flows[1] = self.layers[0] @ input + self.biases[0]
-                flow = self.final_activation(  self.flows[1] ) 
-                return flow    
+                self.flows[0] = self.layers[0] @ input + self.biases[0] 
+                self.activated_flows[0] = self.hidden_activation( self.flows[0] ) 
 
-            #   Flow and use activation function for all hiden layers
-            for i, layer in enumerate(self.layers[1:-1]):
-                self.flows[i+2] = layer @ flow + self.biases[i+1] 
-                flow = self.hidden_activation( self.flows[i+2] )
+            else:
+                self.flows[0] = self.layers[0] @ input + self.biases[0]
+                self.activated_flows[0] = self.final_activation( self.flows[0] ) 
+                return self.activated_flows[0]
                 
-            #   All activations can be different, we only change the final activation for simplicity 
-            self.flows[-1] = self.layers[-1] @ flow  + self.biases[-1] 
-            flow = self.final_activation( self.flows[-1] )
- 
+            #   Flow and use activation function for all hiden layers
+            for layer in range(1, len(self.layers)-1):
+                self.flows[layer] = self.layers[layer] @ self.activated_flows[layer-1] + self.biases[layer] 
+                self.activated_flows[layer] = self.hidden_activation( self.flows[layer] ) 
+                
+            #   All activations can be different, we only allow change of the final activation for simplicity 
+            self.flows[-1] = self.layers[-1] @ self.activated_flows[-2]  + self.biases[-1] 
+            self.activated_flows[-1] = self.final_activation( self.flows[-1] )
+            flow = self.activated_flows[-1]
+
         else: # I split this for optimization. Only check the condition once. Dont rewrite flows uneeded  
 
             if len(self.layers) > 1: #  if only 1 layer then the final layer is the only layer.
@@ -344,7 +346,9 @@ class DNN:
                 
             flow = self.final_activation(self.layers[-1] @ flow + self.biases[-1] )
     
-        return flow # flow.reshape(len(flow),1) if batch size 1 reshape needed
+        if flow.shape[1] == 1:
+            flow.reshape(len(flow),1) # if batch size 1 reshape needed
+        return flow 
         
     def get_accuracy(self, batch, batch_supervision):
         #   Only for classification. Take Pass batches from the testing data partition
@@ -419,14 +423,14 @@ class DNN:
         supervision_loss_in_terms_of_preactivation = [None] * len(self.layers)
         supervision_loss_in_terms_of_preactivation[-1] = loss_in_terms_of_z_final # First step of induction is done by hand then chained to form later steps.  
         for layer in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
-            supervision_loss_in_terms_of_preactivation[layer] = ( self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_preactivation[layer+1] ) * self.hidden_activation_primed(self.flows[layer+1]) # layer + 1 is actually better thought of as the current layer. I saved the first flow as the batch. Flows is 1 more in shape than layers  
+            supervision_loss_in_terms_of_preactivation[layer] = ( self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_preactivation[layer+1] ) * self.hidden_activation_primed(self.flows[layer]) 
         
         #   This section appears to be invariant of loss function.
         #   Loss in terms of a layers weights. Think of this as loss in terms of pre-activations for the layer times the weights coefficient. 
         supervision_loss_in_terms_of_weights = [None]*len(self.layers) # Each index is its respective layers partials
         supervision_loss_in_terms_of_weights[0] = supervision_loss_in_terms_of_preactivation[0] @ batch.transpose() #  First layer is not inductive because the input is not activated. its the data set
         for layer in range(1, len(supervision_loss_in_terms_of_preactivation)):  
-            supervision_loss_in_terms_of_weights[layer] = supervision_loss_in_terms_of_preactivation[layer] @ self.hidden_activation( self.flows[layer].transpose() ) #  Note: Flows is started with the batch. Thus flows layer is actually the previous layer because flows len is one more than layers    
+            supervision_loss_in_terms_of_weights[layer] = supervision_loss_in_terms_of_preactivation[layer] @ self.activated_flows[layer-1].transpose()     
 
         regulizer_loss_in_term_of_weights = LOSS_FUNCTIONS.regularize_weights_primed(self) # Do not normalize. This is a term of the loss
         total_loss_in_terms_of_weights = [ partial + regulizer_loss_in_term_of_weights[layer] for layer, partial in enumerate( supervision_loss_in_terms_of_weights )] #  Do not weight this sum. This is the proven gradient. Weight the importance of loss's terms in LOSS functions static var for that
