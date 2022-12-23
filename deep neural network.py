@@ -140,13 +140,9 @@ class ACTIVATIONS:
 
     @staticmethod
     def softmax_primed(dendritic_input):
-        #   l-1 activation prime used inductively. thus last layers activation primed unneeded
+        #   Dont use this read below
+        #   This is a jacobian that is merged into the cross entropy primed. Amazingly they merge to form delta cross / delta softmax * delta softmax / delta z final = d cross / d z final = yhat - y
         raise Exception("Back propagation induction allows us to skip the first activations prime")
-        #   This is a jacobian
-        e_to_x = np.exp(dendritic_input)
-        column_sum = np.sum(e_to_x, axis=1)
-        coeff = e_to_x / column_sum**2
-        return coeff*(column_sum - e_to_x)
         
     @staticmethod
     def none(dendritic_input):
@@ -157,16 +153,20 @@ class LOSS_FUNCTIONS:
     normality_importance = 1 - accuracy_importance #    This scales the importace of the regulizer
     regulizer_exponential = 12 # Must be even so no negatives 
     regulizer_threshold = 2 #   This prevents the regulizer from punishing nominal weights. Only add punishment if the weights magnitude exceeds the threshold
+    #   For polymorphism. Add loss primes as loss in terms of preactivation final 
 
     @staticmethod
     def mean_squared_error(dnn, batch, supervision):
         #   The expectation is the oupute of the net
         residual = dnn.feed_forward(batch) - supervision
-        return np.sum( residual**2 ) / residual.shape[1] 
+        accuracy_loss = float( LOSS_FUNCTIONS.accuracy_importance * np.sum( residual**2 ) / residual.shape[1] ) 
+        normality_loss = float( LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn) )
+        return accuracy_loss + normality_loss
+        
 
     @staticmethod
     def mean_squared_error_primed(dnn, batch, supervision):
-        return (2/batch.shape[1]) * dnn.feed_forward(batch) - supervision
+        return (2*LOSS_FUNCTIONS.accuracy_importance/batch.shape[1]) * (dnn.activated_flows[-1] - supervision)
 
     @staticmethod
     def cross_entropy(dnn, batch, supervision):
@@ -182,8 +182,7 @@ class LOSS_FUNCTIONS:
     @staticmethod
     def cross_entropy_primed(dnn, batch, supervision):
         #   WARNING: This is the prime of the superivison loss only. The full loss requires other terms primes like regulizer
-        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z   Other terms of to average loss over batch and weigh loss in terms of supervision in contrast with other terms like the regulizer
-        #return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.feed_forward(batch) - supervision)  
+        #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z   Other terms average loss over batch and weigh loss in terms of supervision in contrast with other terms like the regulizer
         return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.activated_flows[-1] - supervision)  
 
     @staticmethod
@@ -413,15 +412,20 @@ class DNN:
         In general, when finding gradients. Use the partial derivitive of a specific weight using rows and columns as indicies, then generalize into vector notation. 
         """
         
-        #   TODO optimize by storing activated flows. not very effective 
-
+        """
+            
+            # Mean squared error method
+            loss_primed = self.loss_primed(self, batch, supervision) 
+            self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
+            gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
+            gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())      
+        """
         #   Forward Propagate flows 
         self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs and batch to self
         
-        #   Backpropagate Loss in terms of flows
-        loss_in_terms_of_z_final = self.loss_primed(self, batch, supervision) 
+        #   Backpropagate Loss in terms of flows 
         supervision_loss_in_terms_of_preactivation = [None] * len(self.layers)
-        supervision_loss_in_terms_of_preactivation[-1] = loss_in_terms_of_z_final # First step of induction is done by hand then chained to form later steps.  
+        supervision_loss_in_terms_of_preactivation[-1] = self.loss_primed(self, batch, supervision) # First step of induction is done by hand then chained to form previous steps with backpropagation 
         for layer in reversed( range(len(self.layers)-1) ): #    Backpropagation is in reverse order. Final done apove, thats why minus one to length
             supervision_loss_in_terms_of_preactivation[layer] = ( self.layers[layer+1].transpose() @ supervision_loss_in_terms_of_preactivation[layer+1] ) * self.hidden_activation_primed(self.flows[layer]) 
         
@@ -1116,7 +1120,7 @@ class Main:
         else:  #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
             neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name)
+            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name, final_activation_and_prime = new_architecture["final_activation_and_prime"], loss_function_and_prime = new_architecture["loss_function_and_prime"])
             #   Launch random net => train on general data to get ball park then esoteric. All without the lock
             dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
             dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
@@ -1132,15 +1136,24 @@ class Main:
         return dnn_spawn
 
 
-neurons_per_layer = [420, 90, 20] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-drop_out_per_layer = [0.8, .6, 0.5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer}
+#   If you want to build a new network do configure it with this block. 
+neurons_per_layer = [420, 90] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+drop_out_per_layer = [0.8, .6] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+#   MSE
+final_activation_and_prime = [ACTIVATIONS.none, ACTIVATIONS.none]
+loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
+#   Catigorical Cross Entropy
+#loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
+#final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
+
+new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer, \
+    "final_activation_and_prime":final_activation_and_prime, "loss_function_and_prime":loss_function_and_prime}
+
 # Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
 Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architecture, restart=(True, False))
 #Main.hone_champ("mnist dnn categorical cross entropy")
 #Main.test_champ("mnist dnn categorical cross entropy")
 
-        
 
 """
     solve mnist with mse
@@ -1150,11 +1163,7 @@ Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architectur
         finish up mse 
         add network arch to its name. mse can have many archs etc  
             optimize gradient funcition with cross entropy. 
-        cross primed and cross should use stored flows not feed forward themselfeves.
-        switch to loss in terms of z instead of activation. This will make it so you dont recalulate it with bias. as well as increase readablity with chain rule
-        change away from flows having the batch as flow 0. inside gradient create a temp vars or whatever but dont spend too much time. Make it readable then move forward 
-        The step size should be unbounded, issue is the net getting stuck zeroed
-
+        multi thread iterations then converge every x iterations. x as 10^3 for default
 
     make net polymorphic so you can change input and output size 
     solve for mnist inverted 
@@ -1178,12 +1187,6 @@ Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architectur
 
     Optimizations:
        
-
-   # Mean squared error method
-    loss_primed = self.loss_primed(self, batch, supervision) 
-    self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
-    gradient_layer_1 = self.layers[1].transpose() @ loss_primed @ self.hidden_activation_primed( batch.transpose() ) 
-    gradient_layer_2 = loss_primed @ self.hidden_activation(self.flows[0].transpose())
 
     dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
 
