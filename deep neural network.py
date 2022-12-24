@@ -157,16 +157,17 @@ class LOSS_FUNCTIONS:
 
     @staticmethod
     def mean_squared_error(dnn, batch, supervision):
-        #   The expectation is the oupute of the net
-        residual = dnn.feed_forward(batch) - supervision
-        accuracy_loss = float( LOSS_FUNCTIONS.accuracy_importance * np.sum( residual**2 ) / residual.shape[1] ) 
+        #   Division by residual shape 0 is averaging loss, division by shape 1 is batch averaging 
+        residual = supervision - dnn.feed_forward(batch)
+        accuracy_loss = float( LOSS_FUNCTIONS.accuracy_importance * np.sum( residual**2 ) / (residual.shape[0] + residual.shape[1]) ) 
         normality_loss = float( LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn) )
         return accuracy_loss + normality_loss
         
 
     @staticmethod
     def mean_squared_error_primed(dnn, batch, supervision):
-        return (2*LOSS_FUNCTIONS.accuracy_importance/batch.shape[1]) * (dnn.activated_flows[-1] - supervision)
+        #   Notice that the residual sign is flipped in the prime. This is because when you chain the outter residual and bring its exponential down you then derivate the inner residual and the sign of the estimation is negative
+        return (2*LOSS_FUNCTIONS.accuracy_importance/(batch.shape[0] + batch.shape[1])) * (dnn.activated_flows[-1] - supervision)
 
     @staticmethod
     def cross_entropy(dnn, batch, supervision):
@@ -413,7 +414,7 @@ class DNN:
         """
         
         """
-            
+            trash
             # Mean squared error method
             loss_primed = self.loss_primed(self, batch, supervision) 
             self.feed_forward(batch, forward_propagating=True) #    Store the layers outputs to class
@@ -522,6 +523,8 @@ class DNN:
                 d_loss, perspective_loss = delta_loss(last_step, last_loss, buffered_network, buffered_biases)
                 loop_count += 1 #   In the event that the network is perfectly fit to the data there will be no improvment possible. Break
                 if loop_count == 30:
+                    self.layers = buffered_network
+                    self.biases = buffered_biases
                     return 0.0, 0.0 #  Futer iterations could still provide improvment but this batch is perfectly fit 
                     
                 if d_loss == 0:
@@ -530,7 +533,7 @@ class DNN:
                         #   The reLU function is causing the losses to equal because the output equals zero pre and post descent
                         #   This is appears to be a fatal error. Solution may be to use leaky reLU. if < 0 then x *= -.001  
                 
-            #   We now know that the delta loss is negative. Lets optimize the step size further with parabula then finalize step
+            #   We now know that the delta loss is negative. Lets potentially optimize the step size further with parabula then finalize step
             parabala_points_x = [0, last_step,   last_step*1.5] 
             upstep_delta_loss, upstep_loss = delta_loss(parabala_points_x[2], last_loss ,buffered_network, buffered_biases)
             parabala_points_y = [0, d_loss, upstep_delta_loss] 
@@ -1095,6 +1098,7 @@ class Main:
             Restart arg 1 says to zero out the score so new nets are always found, second arg is to reload the data base from csv to shelve
             new architecture is a dictionary with number of neurons per hidden layer as well as thier drop out, if false than the champ is loaded and honed
             The lock mechanism will ensure that all changes improve the testing data. We get the gradient from the training data always but check to make sure the testing is improved before step.
+                Note that dropout makes the lock appear as if its not working. Thats because the network changes each iteration from dropout. Without dropout and the lock, semi test loss will always improve or logic error
         """
 
         step_algorithm = "parabola"    #    Algorithm used to determine step size in gradient decent  
@@ -1122,7 +1126,7 @@ class Main:
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
             dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name, final_activation_and_prime = new_architecture["final_activation_and_prime"], loss_function_and_prime = new_architecture["loss_function_and_prime"])
             #   Launch random net => train on general data to get ball park then esoteric. All without the lock
-            dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
+            #dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
             dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
             dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
             dnn_spawn.data.change_data_set(esoteric=False)
@@ -1137,34 +1141,34 @@ class Main:
 
 
 #   If you want to build a new network do configure it with this block. 
-neurons_per_layer = [420, 90] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-drop_out_per_layer = [0.8, .6] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer = [420, 200, 120, 90] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+drop_out_per_layer = [0,    0,   0,  0]#[0.8, .5,  .6, .5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 #   MSE
-final_activation_and_prime = [ACTIVATIONS.none, ACTIVATIONS.none]
-loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
+#final_activation_and_prime = [ACTIVATIONS.none, ACTIVATIONS.none]
+#loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
 #   Catigorical Cross Entropy
-#loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
-#final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
+loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
+final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
 
 new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer, \
     "final_activation_and_prime":final_activation_and_prime, "loss_function_and_prime":loss_function_and_prime}
 
-# Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
+#Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
 Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architecture, restart=(True, False))
-#Main.hone_champ("mnist dnn categorical cross entropy")
+#Main.hone_champ("mnist dnn mean squared error")
 #Main.test_champ("mnist dnn categorical cross entropy")
 
 
 """
     solve mnist with mse
-
-        attempt gradient with mse
-        if it doesnt work read how to do it
-        finish up mse 
+        the gradient doesnt seem to be strong with many layers 
+            Examine numerical stability of gradients partials 
         add network arch to its name. mse can have many archs etc  
             optimize gradient funcition with cross entropy. 
         multi thread iterations then converge every x iterations. x as 10^3 for default
 
+    examine why lock is allowing bad change
+    in print out init print the last layers neurons and dropout too
     make net polymorphic so you can change input and output size 
     solve for mnist inverted 
 
