@@ -147,7 +147,11 @@ class ACTIVATIONS:
     @staticmethod
     def none(dendritic_input):
         return dendritic_input
-
+    
+    @staticmethod
+    def none_primed(dendritic_input):
+        return 1
+    
 class LOSS_FUNCTIONS:
     accuracy_importance = .9 # [0,1] This may not working properly because induction method differentiates loss in terms of z not activated z
     normality_importance = 1 - accuracy_importance #    This scales the importace of the regulizer
@@ -163,11 +167,13 @@ class LOSS_FUNCTIONS:
         normality_loss = float( LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn) )
         return accuracy_loss + normality_loss
         
-
     @staticmethod
     def mean_squared_error_primed(dnn, batch, supervision):
         #   Notice that the residual sign is flipped in the prime. This is because when you chain the outter residual and bring its exponential down you then derivate the inner residual and the sign of the estimation is negative
-        return (2*LOSS_FUNCTIONS.accuracy_importance/(batch.shape[0] + batch.shape[1])) * (dnn.activated_flows[-1] - supervision)
+        loss_in_terms_of_activation    = (2*LOSS_FUNCTIONS.accuracy_importance/(batch.shape[0] + batch.shape[1])) * (dnn.activated_flows[-1] - supervision)
+        activation_in_terms_of_preactivation = dnn.final_activation_primed( dnn.flows[-1] )
+        loss_in_terms_of_preactivation = loss_in_terms_of_activation * activation_in_terms_of_preactivation
+        return loss_in_terms_of_preactivation
 
     @staticmethod
     def cross_entropy(dnn, batch, supervision):
@@ -184,7 +190,9 @@ class LOSS_FUNCTIONS:
     def cross_entropy_primed(dnn, batch, supervision):
         #   WARNING: This is the prime of the superivison loss only. The full loss requires other terms primes like regulizer
         #   This is not the complete derivitize. It is the change in loss in terms of z final pre activation = d loss / d activation * d activation / d z =  d loss / d z   Other terms average loss over batch and weigh loss in terms of supervision in contrast with other terms like the regulizer
-        return (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.activated_flows[-1] - supervision)  
+        #   Proof: https://towardsdatascience.com/derivative-of-the-softmax-function-and-the-categorical-cross-entropy-loss-ffceefc081d1
+        loss_in_terms_of_preactivation = (LOSS_FUNCTIONS.accuracy_importance / supervision.shape[1]) * (dnn.activated_flows[-1] - supervision)  
+        return loss_in_terms_of_preactivation
 
     @staticmethod
     def regularize_weights(dnn):
@@ -211,7 +219,7 @@ class LOSS_FUNCTIONS:
         return gradients 
 
 class DNN:
-    def __init__(self, neurons_per_layer, drop_out_per_layer, name, \
+    def __init__(self, neurons_per_layer, drop_out_per_layer, name_abrigged, \
             loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed],\
             hidden_layers_activation_and_prime=[ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed],\
             final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]):
@@ -240,10 +248,11 @@ class DNN:
             return biases
 
         """
-            Names are CONSTANTS, never change
-            Name dnn. The name will tell what kind of network it is. We infer many things from the name:
-            Which data set its tied to, its functionality, the shape of the outter layers, etc
-        
+            If you want a list of names get all keys from the shelve then get all keys with for example mnist AND ... dnn in it etc. 
+            Dnn will querry the name for its setup and operation. Example the data set name should be in the name, exp mnist
+            Do not include the achitecture in the name. That will be infered from constructors parameters 
+            The name will tell what kind of network it is. We infer many things from the name:
+
             NAMES:
             mnist dnn categorical cross entropy 
                 cat cross entropy loss
@@ -255,7 +264,9 @@ class DNN:
                 mse loss 
                 input 10, output 28**2
         """
-        self.name = name
+        
+        #   We override later in constructor with full name. For now we save it for use in construction
+        self.name = name_abrigged
 
         #  Attach data set to DNN. You can switch data set at any time for transfer learning
         self.load_data_set() #  Data set is infered with dnn name
@@ -308,6 +319,8 @@ class DNN:
 
         #   Tie Loss and its prime
         self.get_loss, self.loss_primed = loss_function_and_prime 
+
+        self.name = name_abrigged + " layers neurons " + str([layer.shape[0] for layer in self.layers]) + " dropout per layer " + str(drop_out_per_layer + [0]) 
 
     def feed_forward(self, input, forward_propagating=False):   
         #   Parse independent vars, ie observation into the networks first layer and process activation func if network has hidden layers 
@@ -576,8 +589,8 @@ class DNN:
                     normalize_gradients_ = " using Normalized Gradients"
                 else: 
                     normalize_gradients_ = " not using Normalized Gradients"
-                print("\n\n\n\n\t\t\t\t\t\t\t\t\t\t\t" + self.name.upper() + "\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_ + " LOCK " + str(fit_to_my_data).upper())
-                print("\n\t\t\t\tNeurons per Layer: " + str(self.neurons_per_layer) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(self.drop_out_per_layer) + \
+                print("\n\n\n\n" + self.name.upper() + "\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tFIT\n\n" + "\t\t\t\t\t\t\t\t\tStep Algorithm: " + algorithm.__name__.upper() + normalize_gradients_ + " LOCK " + str(fit_to_my_data).upper())
+                print("\n\t\t\t\tNeurons per Layer: " + str([layer.shape[0] for layer in self.layers]) + "\t\t\t Batch Size: " + str(batch_size) + "\t\t\tDropout per Layer: " + str(self.drop_out_per_layer + [0]) + \
                     "\t Weights of terms in loss function: Supervision " + str(np.round(LOSS_FUNCTIONS.accuracy_importance,2)) + ", Regulizer " + str(np.round(LOSS_FUNCTIONS.normality_importance,2)) )        
             elif message_type == "epoch":
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
@@ -712,7 +725,7 @@ class DNN:
         normalize_gradients = True
         
         #   Parabolic function vars
-        step_reset = .6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
+        step_reset = 1#.6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
         step_bounds = (-10, 10) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
@@ -1124,9 +1137,9 @@ class Main:
         else:  #   Try a new architecture and see if it can outperform the champ. Or Try your first architecture   
             neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name=champ_name, final_activation_and_prime = new_architecture["final_activation_and_prime"], loss_function_and_prime = new_architecture["loss_function_and_prime"])
+            dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name_abrigged=champ_name, final_activation_and_prime = new_architecture["final_activation_and_prime"], loss_function_and_prime = new_architecture["loss_function_and_prime"])
             #   Launch random net => train on general data to get ball park then esoteric. All without the lock
-            #dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
+            dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
             dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
             dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
             dnn_spawn.data.change_data_set(esoteric=False)
@@ -1141,34 +1154,40 @@ class Main:
 
 
 #   If you want to build a new network do configure it with this block. 
-neurons_per_layer = [420, 200, 120, 90] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-drop_out_per_layer = [0,    0,   0,  0]#[0.8, .5,  .6, .5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
-#   MSE
-#final_activation_and_prime = [ACTIVATIONS.none, ACTIVATIONS.none]
-#loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
-#   Catigorical Cross Entropy
-loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
-final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
+loss_type = "mean squared error"
+#loss_type = "categorical cross entropy"
+neurons_per_layer = [420, 200, 120, 90, 45] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+drop_out_per_layer = [0.8, .5,  .6, .5, .5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+
+if   loss_type == "mean squared error":
+    name_abrigged = "mnist dnn mean squared error"
+    final_activation_and_prime = [ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed]
+    loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
+elif loss_type == "categorical cross entropy":
+    name_abrigged = "mnist dnn categorical cross entropy"
+    loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
+    final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
 
 new_architecture = {"neurons per layer":neurons_per_layer, "drop out per layer":drop_out_per_layer, \
     "final_activation_and_prime":final_activation_and_prime, "loss_function_and_prime":loss_function_and_prime}
+full_name = name_abrigged + " layers neurons " + str(neurons_per_layer + [10]) + " dropout per layer " + str(drop_out_per_layer + [0]) 
 
-#Main.hone_champ("mnist dnn categorical cross entropy", new_architecture=new_architecture, restart=(True, False))
-Main.hone_champ("mnist dnn mean squared error", new_architecture=new_architecture, restart=(True, False))
-#Main.hone_champ("mnist dnn mean squared error")
-#Main.test_champ("mnist dnn categorical cross entropy")
+#   Create a new dnn as champ, train it, then save it to shelf 
+Main.hone_champ(name_abrigged, new_architecture=new_architecture, restart=(True, False))
+Main.hone_champ(full_name)
 
 
 """
     solve mnist with mse
         the gradient doesnt seem to be strong with many layers 
             Examine numerical stability of gradients partials 
-        add network arch to its name. mse can have many archs etc  
-            optimize gradient funcition with cross entropy. 
+                backpropagation is a sequential operation. Check if the gradient gets weaker with earlier layers 
+        refactor so champ is a singleton for each data set
         multi thread iterations then converge every x iterations. x as 10^3 for default
 
+
     examine why lock is allowing bad change
-    in print out init print the last layers neurons and dropout too
+        I think i fixed this. zero drop out before investigating. erase this task if lock on and all output shows semi loss going down 
     make net polymorphic so you can change input and output size 
     solve for mnist inverted 
 

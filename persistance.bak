@@ -13,6 +13,6 @@
 'live feed supervision', (1242190848, 4829)
 'mnist dnn champ best accuracy', (1661574656, 188)
 'mnist dnn champ', (1661575168, 18620503)
-'mnist dnn categorical cross entropy best accuracy', (1680196096, 5)
-'mnist dnn categorical cross entropy', (1680196608, 18620600)
+'mnist dnn categorical cross entropy best accuracy', (1680196096, 188)
+'mnist dnn categorical cross entropy', (1680196608, 5262136)
 'mnist dnn mean squared error best accuracy', (1698817536, 5)
