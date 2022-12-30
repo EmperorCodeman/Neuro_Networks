@@ -852,7 +852,8 @@ class DNN:
 
     def dream_a_mosiac(self, lables_batch):
         dreams = self.feed_forward(lables_batch)
-        dreams[dreams < .5] = 0 
+        dreams[dreams < .5] = 0
+        dreams *= 255 
         self.data.show_elements(dreams)
 
     def load_data_set(self):
@@ -991,18 +992,18 @@ class MNIST:
                 data_set = self.my_test
             elif data_set == "live feed":
                 data_set = self.live_feed 
+            active_pixels = data_set != 0
+            data_set[active_pixels] = 255
         
         mosaic_width = (28*images_per_row)
         total_images_to_show = min(images_per_row**2, data_set.shape[1])
-        if total_images_to_show < data_set.size: # TODO sort the sample no matter its size so its easier to read 
-            elements = np.random.randint(0, data_set.shape[1], total_images_to_show)
+        if total_images_to_show < data_set.size: 
+            elements = np.arange(total_images_to_show) 
         else:
-            elements = np.arange(0, data_set.shape[1]) #   Show all in sequential order not random  
+            elements = np.random.randint(0, data_set.shape[1], total_images_to_show)  #   Show random sample of data set  
         if len(elements) > images_per_row**2: raise Exception("Too many elments to show")
         mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
 
-        active_pixels = data_set != 0
-        data_set[active_pixels] = 255
         for i, element in enumerate(elements):
             # #   Image will not work unless dtype is uint8
             #image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
@@ -1193,7 +1194,7 @@ class Main:
                 dnn_spawn.data.change_data_set(esoteric=False)
             elif "dream" in champ_name and "mnist" in champ_name:
                 #dnn_spawn.data.show_elements(dnn_spawn.data.train_supervision)
-                dnn_spawn.fit(batch_size=3, epochs_limit=5, algorithm=step_algorithm, fit_to_my_data=False)
+                dnn_spawn.fit(batch_size=3, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)
                 dnn_spawn.fit(batch_size=32, epochs_limit=3, algorithm=step_algorithm, fit_to_my_data=False)
 
         #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
@@ -1214,8 +1215,12 @@ application = "dream mnist"
 #application = "mnist"
 loss_type = "mean squared error"
 #loss_type = "categorical cross entropy"
-neurons_per_layer =  [] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-drop_out_per_layer = [] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+if application == "dream mnist": 
+    neurons_per_layer =  [] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+    drop_out_per_layer = [] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+elif application == "mnist":
+    neurons_per_layer =  [1200, 600, 300] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+    drop_out_per_layer = [.5,    .6,  .7] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 if   loss_type == "mean squared error":
     name_abrigged = application + " dnn mean squared error"
@@ -1237,20 +1242,13 @@ Main.hone_champ(full_name)
 
 
 """
-    solve mnist with mse
-        switch to dream mnist train and use
-        refactor so champ is a singleton for each data set
-        multi thread iterations then converge every x iterations. x as 10^3 for default
-
-    For polymorphism. Add loss primes as loss in terms of preactivation final. do not mix loss of regulizer with loss output. dirty. call seperatly 
-
-    examine why lock is allowing bad change
-        I think i fixed this. zero drop out before investigating. erase this task if lock on and all output shows semi loss going down 
-    make net polymorphic so you can change input and output size 
-    solve for mnist inverted 
-
-
+    try dream on deep net
+ 
         Goals
+
+    refactor so champ is a singleton for each data set
+    multi thread iterations then converge every x iterations. x as 10^3 for default
+    For polymorphism. Add loss primes as loss in terms of preactivation final. do not mix loss of regulizer with loss output. dirty. call seperatly 
 
     feed generator to classifierer and test accur 
 
