@@ -126,7 +126,7 @@ class ACTIVATIONS:
     def reLU_primed(dendritic_input):
         #   The derivitave of pairwise function is a pairwise derivative. Simply its the derivitive of each of the functions it directs to 
         #   In this case. x or 0. Thus its derivitive is 1 or 0 
-        return np.ones_like(dendritic_input) * (dendritic_input > 0)
+        return np.ones_like(dendritic_input) * (dendritic_input > 0) # Examin. The np ones is unneeded i think 
 
     @staticmethod
     def softmax(dendritic_input):
@@ -157,20 +157,20 @@ class LOSS_FUNCTIONS:
     normality_importance = 1 - accuracy_importance #    This scales the importace of the regulizer
     regulizer_exponential = 12 # Must be even so no negatives 
     regulizer_threshold = 2 #   This prevents the regulizer from punishing nominal weights. Only add punishment if the weights magnitude exceeds the threshold
-    #   For polymorphism. Add loss primes as loss in terms of preactivation final 
-
+ 
     @staticmethod
     def mean_squared_error(dnn, batch, supervision):
         #   Division by residual shape 0 is averaging loss, division by shape 1 is batch averaging 
         residual = supervision - dnn.feed_forward(batch)
-        accuracy_loss = float( LOSS_FUNCTIONS.accuracy_importance * np.sum( residual**2 ) / (residual.shape[0] + residual.shape[1]) ) 
+        accuracy_loss = float( LOSS_FUNCTIONS.accuracy_importance * np.sum( residual**2 ) / (residual.shape[0] * residual.shape[1]) ) 
         normality_loss = float( LOSS_FUNCTIONS.normality_importance * LOSS_FUNCTIONS.regularize_weights(dnn) )
         return accuracy_loss + normality_loss
         
     @staticmethod
     def mean_squared_error_primed(dnn, batch, supervision):
         #   Notice that the residual sign is flipped in the prime. This is because when you chain the outter residual and bring its exponential down you then derivate the inner residual and the sign of the estimation is negative
-        loss_in_terms_of_activation    = (2*LOSS_FUNCTIONS.accuracy_importance/(batch.shape[0] + batch.shape[1])) * (dnn.activated_flows[-1] - supervision)
+        #   Division by batch shape 0 is averaging loss, division by shape 1 is batch averaging   
+        loss_in_terms_of_activation    = (2*LOSS_FUNCTIONS.accuracy_importance/(batch.shape[0] * batch.shape[1])) * (dnn.activated_flows[-1] - supervision)
         activation_in_terms_of_preactivation = dnn.final_activation_primed( dnn.flows[-1] )
         loss_in_terms_of_preactivation = loss_in_terms_of_activation * activation_in_terms_of_preactivation
         return loss_in_terms_of_preactivation
@@ -212,8 +212,8 @@ class LOSS_FUNCTIONS:
         for layer in dnn.layers:
             gradient = np.zeros_like(layer)
             weights_too_large = np.abs(layer) >= LOSS_FUNCTIONS.regulizer_threshold
-            gradient[weights_too_large] = layer[weights_too_large]
-            gradient[weights_too_large] = COEFF * (gradient[weights_too_large]**(LOSS_FUNCTIONS.regulizer_exponential-1))
+            #gradient[weights_too_large] = layer[weights_too_large]
+            gradient[weights_too_large] = COEFF * (layer[weights_too_large]**(LOSS_FUNCTIONS.regulizer_exponential-1))
             gradients.append( gradient )  
         
         return gradients 
@@ -237,9 +237,11 @@ class DNN:
 
         def initialize_layer(neurons_count, last_layers_rows):
             #   Initialize weights as from uniform distribution between -1, and 1. Then we divide by neural count so that the layers output does not get larger with more neurons
+            #   I changed to only positive out of fear that negative inits would create dead paths. Softmax is now numerically stable, regulizer not needed. but this is all weak thoughts
             return np.random.uniform(-1, 1, last_layers_rows*neurons_count).reshape(neurons_count, last_layers_rows) / neurons_count
 
         def initialize_biases(layers):
+            #   I changed to only positive out of fear that negative inits would create dead paths. Softmax is now stable. but this is all weak thoughts
             biases = []
             for layer in layers:
                 #   We divide by the layers neurons so that biases do not increase the magnitiude of the flow as it moves layer to layer
@@ -286,17 +288,22 @@ class DNN:
             neurons_in_layer = neurons_per_layer[layer]
             all_neuron_indicies.append( np.arange(0, neurons_in_layer) ) # List of all indicies of neurons at given layer
             number_of_neurons_to_keep.append( int(neurons_in_layer * drop_not) ) 
-        self.all_neuron_indicies = all_neuron_indicies
+        self.all_neuron_indicies = all_neuron_indicies # use with dropout functionality 
         self.number_of_neurons_to_keep = number_of_neurons_to_keep #    The last layer always keeps all its neurons thus is not included
         self.kept_weights = None # Used to revert from dropout 
 
         #   Initialize all layers weights as np objects with the shapes as given from neurons per layer
-        input_layer = initialize_layer(neurons_per_layer[0], self.data.train_data.shape[0]) #  Plus one is for bias
-        layers = [input_layer]
-        for i, neural_count in enumerate(neurons_per_layer[1:]): #  Hidden layers 
-            layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
-        #   Init the final layer. It conforms its shape entirely and is not programable
-        layers.append(initialize_layer(self.data.train_supervision.shape[0], neurons_per_layer[-1]))
+        if len(neurons_per_layer) != 0:
+            input_layer = initialize_layer(neurons_per_layer[0], self.data.train_data.shape[0]) #  Plus one is for bias
+            layers = [input_layer]
+            for i, neural_count in enumerate(neurons_per_layer[1:]): #  Hidden layers 
+                layers.append(initialize_layer(neural_count, neurons_per_layer[i]))
+            #   Init the final layer. It conforms its shape entirely and is not programable
+            layers.append(initialize_layer(self.data.train_supervision.shape[0], neurons_per_layer[-1]))
+        else:
+            #   Single layer net. Example use. Dream mnist
+            layers = [ initialize_layer(self.data.train_supervision.shape[0], self.data.train_data.shape[0]) ]
+
         self.layers = layers
         
         #   Data storage for layers outputs 
@@ -596,27 +603,37 @@ class DNN:
                 print("\n\n\t\t\t\t\t\t\t\t\t\t\t\t\tEPOCH: " + str(epoch+1) + "\n\t\t\t\t-----------------------------------------------------------------------------------------------------------------------------------------------------------\n")
             elif message_type == "progress":
                 loss = self.get_loss(self, batch, batch_supervision)
-                test_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision) 
+                semi_test_loss = self.get_loss(self, semi_test_batch, semi_test_batch_supervision) 
                 # if loss < 0.01: 
                 #     nonlocal use_semi_test
                 #     if not use_semi_test:
                 #         use_semi_test = True #    You were able to fit a training batch. Therefor for this batch size/epoch we switch to only taking steps that improve against data not used to build gradients. This effort inorder to counter overfitting to training data while not slowing down training in the beginning
                 #         print("\n\nUsing Semi test now\n")
-                test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
                 if fit_to_my_data:
                     testing_accuracy_label = "Esoteric Testing Accuracy: "
                 else:
                     testing_accuracy_label = "Testing Accuracy: "
-                train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
-                print("\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\t Step Size: " + f'{step_size_weights:.2E}' + "\t Training Loss: " + str(np.round(loss, 2)) + "\tSemi Testing Loss: " + str(np.round(test_loss, 2))\
-                    + "\t Training Accuracy: " + str(train_accuracy) + "\t\t" + testing_accuracy_label + str(test_accuracy))
+                if "dream" in self.name:
+                    testing_loss = self.get_loss(self, test_batch, test_batch_supervision)
+                    accuracy = ["", "\tTesting loss: " + f'{testing_loss:.2E}']
+                else:
+                    train_accuracy = np.round(self.get_accuracy(batch, batch_supervision), 2)
+                    test_accuracy = np.round(self.get_accuracy(test_batch, test_batch_supervision), 2)
+                    accuracy = ["\tTraining Accuracy: " + str(train_accuracy), testing_accuracy_label + str(test_accuracy)]    
+                progress_read_out = "\t\t\t\t\tIteration: " + str(inter_epoch_iteration) + "\tStep Size: " + f'{step_size_weights:.2E}' + "\tTraining Loss: " + f'{loss:.5E}' + accuracy[0] \
+                     + "\t\tSemi Testing Loss: " + f'{semi_test_loss:.2E}' + "\t" + accuracy[1]
+                print(progress_read_out)
             elif "final":
                 print("\n\n\n\n\n\t\t-------------FINAL----------------\n\nNow with no drop out and the magnitude of the flows scaled by thier dropout rates")
                 read_out("progress")
                 total_time = (time.time() - start_time) / 60
                 print("\nTotal Execution Time: " + f'{total_time:.2E}' + " Minutes")
-                self.classify_images()
-
+                if not ("dream" in self.name) and "mnsit" in self.name:
+                    self.classify_images() # Classify images to labels from live feed
+                elif "dream" in self.name and "mnist" in self.name:
+                    all_numbers = np.identity(10) # All the labels trained on
+                    self.dream_a_mosiac(all_numbers) #  Dream all numbers and show them in a mosiac
+                    
             else: raise Exception("No message of type")
 
         def perform_drop_out():
@@ -626,10 +643,12 @@ class DNN:
                 for layer in self.all_neuron_indicies:
                     np.random.shuffle(layer)
 
+            if len(self.layers) == 1: return #  If only one layer then there can be no dropout  
+
             randomize_drop_out()
 
             #   The dropped values are stored in the buffer already from the last iteration: For reversion post iteration
-            layers_kept_rows = np.sort( self.all_neuron_indicies[0][:self.number_of_neurons_to_keep[0]] )
+            layers_kept_rows = np.sort( self.all_neuron_indicies[0][:self.number_of_neurons_to_keep[0]] ) # Sort uneeded? 
             kept_weights = [ layers_kept_rows ]
             #   Drop out neurons. ie rows only because its first layer
             self.layers[0] = self.buffered_layers[0][layers_kept_rows]
@@ -654,6 +673,8 @@ class DNN:
             
         def update_buffers():
 
+            if len(self.layers) == 1: return #  If only one layer then there can be no dropout  
+
             #   add the updated weights to the buffer and reset. First and last layer have different shape 
             self.buffered_layers[0][self.kept_weights[0]] = self.layers[0]
             self.buffered_biases[0][self.kept_weights[0]] = self.biases[0]
@@ -672,10 +693,12 @@ class DNN:
             self.buffered_layers[-1][:, self.kept_weights[-1]] = self.layers[-1]
                         
         def undo_drop_out():
-            #   Add all dropped out layers back
-            self.layers = list.copy( self.buffered_layers )
-            self.biases = list.copy( self.buffered_biases )
-            
+
+            if len(self.layers) > 1: #  If only one layer then there can be no dropout  
+                #   Add all dropped out layers back
+                self.layers = list.copy( self.buffered_layers )
+                self.biases = list.copy( self.buffered_biases )
+                
             #   Scale weights to so additional layers dont increase magnitude to activation 
             for layer in range(len(self.layers) - 1):
                 restore_total_weight = 1 - self.drop_out_per_layer[layer]
@@ -725,8 +748,8 @@ class DNN:
         normalize_gradients = True
         
         #   Parabolic function vars
-        step_reset = 1#.6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
-        step_bounds = (-10, 10) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
+        step_reset = .6 #.6 #    Arbitrary value, no theory. Reseting the Step prevents the step from getting 1.5X bigger potentially each iter. TODO replace multiplication with addition so bonds catching the mid point of parabala and you can remove this reset  
+        step_bounds = (0, 1.5) #    Arbitrary upper value, no theory. Do not step negatively below lower, or above upper. If parabola vertex interpolates outside bounds then revert to known loss inside bounds
         
         #   Select Step Algorithm
         if algorithm == "parabola": algorithm = line_search_parabola
@@ -751,12 +774,13 @@ class DNN:
                         This will cause the net to over fit to that area of the set rather then have a ballanced decent from random windows 
                         Thus we randomize the sequence of windows 
                 """
+                
                 #   Update batch for current iteration
                 inter_epoch_iteration += 1     
                 #   We build the gradient from the training data
                 batch = self.data.train_data[:, i:i+batch_size]
                 batch_supervision = self.data.train_supervision[:, i:i+batch_size]
-              
+                
                 #   Drop out neurons randomely to train noise tolerance 
                 perform_drop_out()
 
@@ -778,7 +802,7 @@ class DNN:
                 update_buffers()
 
                 #   Progress Readout
-                if (i % probability_of_printing_readout_per_iter) == 0:                  
+                if (i % probability_of_printing_readout_per_iter) == 0 or inter_epoch_iteration == 1:                  
                     read_out("progress")
 
         #   Undo Dropout and Print out final results of fits call, then revert
@@ -825,6 +849,11 @@ class DNN:
         print("\nClassification of live Feed was: \n\tAccuracy was: " + accuracy + "%")
         print( "\nAttempted Classifications for your batch were: " + str(classifications))
         print(   "Correct Classifications would be:              " + str(labels))
+
+    def dream_a_mosiac(self, lables_batch):
+        dreams = self.feed_forward(lables_batch)
+        dreams[dreams < .5] = 0 
+        self.data.show_elements(dreams)
 
     def load_data_set(self):
         if "mnist" in self.name and "dream" in self.name:
@@ -951,32 +980,36 @@ class MNIST:
         print_labels, compress = False, False
         images_per_row = 30
         
-        if data_set == "train":
-            data_set = self.train_data
-        elif data_set == "test":
-            data_set = self.test_data
-        elif data_set == "my train":
-            data_set = self.my_train
-        elif data_set == "my test":
-            data_set = self.my_test
-        elif data_set == "live feed":
-            data_set = self.live_feed 
+        if type(data_set) is str:
+            if data_set == "train":
+                data_set = self.train_data
+            elif data_set == "test":
+                data_set = self.test_data
+            elif data_set == "my train":
+                data_set = self.my_train
+            elif data_set == "my test":
+                data_set = self.my_test
+            elif data_set == "live feed":
+                data_set = self.live_feed 
         
         mosaic_width = (28*images_per_row)
         total_images_to_show = min(images_per_row**2, data_set.shape[1])
-        if total_images_to_show > data_set.size: # TODO sort the sample no matter its size so its easier to read 
+        if total_images_to_show < data_set.size: # TODO sort the sample no matter its size so its easier to read 
             elements = np.random.randint(0, data_set.shape[1], total_images_to_show)
         else:
             elements = np.arange(0, data_set.shape[1]) #   Show all in sequential order not random  
-        if len(elements) > mosaic_width**2: raise Exception("Too many elments to show")
+        if len(elements) > images_per_row**2: raise Exception("Too many elments to show")
         mosaic = np_.zeros(shape=(mosaic_width, mosaic_width), dtype=np.uint8)
 
+        active_pixels = data_set != 0
+        data_set[active_pixels] = 255
         for i, element in enumerate(elements):
             # #   Image will not work unless dtype is uint8
             #image = self.de_normalize_tensor( self.test_data[:,element] ).reshape(28, 28).get().astype(np.uint8) #   Denormalize => reshape => cupy to numpy => data type to accepted pixel   
-            image = (data_set[:,element] * data_set.shape[0] * 255).reshape(28, 28).get().astype(np.uint8) # for black and white. uncomment above if data is normalized
+            #image = (data_set[:,element] * data_set.shape[0] * 255).reshape(28, 28).get().astype(np.uint8) # for black and white. uncomment above if data is normalized
+            image = data_set[:,element] # for black and white. uncomment above if data is normalized
             row, column = 28*(i // images_per_row), 28*(i % images_per_row)
-            mosaic[row:row+28, column:column+28] = image
+            mosaic[row:row+28, column:column+28] = image.get().reshape(28,28)
     
         #if print_labels:    print("\nLables for images: " + str( np.argmax(self.test_supervision[:,elements], axis=0) ) ) # Extraneous 
         if compress: 
@@ -1003,9 +1036,16 @@ class MNIST:
 
     def invert_data_set(self):
         #   We use this for inverted networks. For example we can dream images from labels etc.
-        temp = (self.train_data, self.test_data, self.my_train, self.my_test, self.live_feed)
-        self.train_data, self.test_data, self.my_train, self.my_test, self.live_feed = self.train_supervision, self.test_supervision, self.my_train_supervision, self.my_test_supervision, self.live_feed_supervision
+        temp = (self.train_data,   self.test_data,        self.my_train,             self.my_test,             self.live_feed)
+        self.train_data = self.train_supervision 
+        self.test_data  = self.test_supervision
+        self.my_train   = self.my_train_supervision
+        self.my_test    = self.my_test_supervision
+        self.live_feed  = self.live_feed_supervision
         self.train_supervision, self.test_supervision, self.my_train_supervision, self.my_test_supervision, self.live_feed_supervision = temp
+        for image in [self.train_supervision, self.test_supervision, self.my_train_supervision, self.my_test_supervision, self.live_feed_supervision]:
+            MNIST.pre_process_images_generation(image) # on or off. 1000 as on
+        self.buffered_self = copy.copy(self) #copy.deepcopy(self)
         return self
 
     def change_data_set(self, esoteric=True):
@@ -1046,7 +1086,14 @@ class MNIST:
         return tensor
 
     @staticmethod
+    def pre_process_images_generation(images):
+        active_pixels = images != 0
+        images[active_pixels] = 1 # WARNING If you have this value larger then the regulizer threshold, than the weights will not be able to form the pixel values in single layer nets. Thus the bias will take over making all categories invarient because the bias affects all columns. 1 curves loss to promote values being smaller or larger dont shroom it
+        return images
+
+    @staticmethod
     def pre_process_images(batch, save_to=None, supervison=None):
+        #   This is for MNIST, for dream mnist I preprocess diferently 
         #   If a row or column is dead then crop it. Then expand size of image back to its original shape. 
         batch.reshape((batch.shape[1], 28, 28))
         for i, image in enumerate( batch.transpose() ):
@@ -1138,33 +1185,45 @@ class Main:
             neurons_per_layer = new_architecture["neurons per layer"] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
             drop_out_per_layer = new_architecture["drop out per layer"] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
             dnn_spawn = DNN(neurons_per_layer, drop_out_per_layer, name_abrigged=champ_name, final_activation_and_prime = new_architecture["final_activation_and_prime"], loss_function_and_prime = new_architecture["loss_function_and_prime"])
-            #   Launch random net => train on general data to get ball park then esoteric. All without the lock
-            dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
-            dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
-            dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
-            dnn_spawn.data.change_data_set(esoteric=False)
-            
+            if not ("dream" in champ_name) and "mnist" in champ_name:
+                #   Launch random net => train on general data to get ball park then esoteric. All without the lock
+                dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=False)    
+                dnn_spawn.data.change_data_set(esoteric=True) #   Now we switch to esoteric data without the lock. NOTE The fit_to_my_data lock insures that all changes improve the test data. Gradient from train, checks if it improves test before moving. Lock locks off of testing loss not testing accuracy
+                dnn_spawn.fit(batch_size=32, epochs_limit=10, algorithm=step_algorithm, fit_to_my_data=False) # If you do too many epochs without the lock then you will deviate too far from original weights. That matters because we never fit to the massive data again. Note we always use the lock after the initial fit to it
+                dnn_spawn.data.change_data_set(esoteric=False)
+            elif "dream" in champ_name and "mnist" in champ_name:
+                #dnn_spawn.data.show_elements(dnn_spawn.data.train_supervision)
+                dnn_spawn.fit(batch_size=3, epochs_limit=5, algorithm=step_algorithm, fit_to_my_data=False)
+                dnn_spawn.fit(batch_size=32, epochs_limit=3, algorithm=step_algorithm, fit_to_my_data=False)
+
         #   Now we engage lock and hone. Only good changes possible. With lock on model will be saved if better found
-        #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
-        dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
-        dnn_spawn.data.change_data_set(esoteric=True)
-        #   Lastly we hone the model with esoteric data
-        dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
+        if not ("dream" in champ_name) and "mnist" in champ_name:
+            #   Switch to giant free data set but put in lock . The lock flag is labeled fit_to_my_data
+            dnn_spawn.fit(batch_size=32, epochs_limit=1, algorithm=step_algorithm, fit_to_my_data=True)
+            dnn_spawn.data.change_data_set(esoteric=True)
+            #   Lastly we hone the model with esoteric data
+            dnn_spawn.fit(batch_size=32, epochs_limit=20, algorithm=step_algorithm, fit_to_my_data=True)
+        elif "dream" in champ_name and "mnist" in champ_name:
+            dnn_spawn.fit(batch_size=32, epochs_limit=3, algorithm=step_algorithm, fit_to_my_data=False)
+
         return dnn_spawn
 
 
 #   If you want to build a new network do configure it with this block. 
+application = "dream mnist"
+#application = "mnist"
 loss_type = "mean squared error"
 #loss_type = "categorical cross entropy"
-neurons_per_layer = [420, 200, 120, 90, 45] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
-drop_out_per_layer = [0.8, .5,  .6, .5, .5] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
+neurons_per_layer =  [] # Logic implicitly solves the columns of a net. Here we specify rows of each layer except the final layer. Rows are neurons count. Last layer rows are infered from data sets supervision  
+drop_out_per_layer = [] # Dropout will adapt the net to noise. Missing respective input forces generalization and hardyness
 
 if   loss_type == "mean squared error":
-    name_abrigged = "mnist dnn mean squared error"
+    name_abrigged = application + " dnn mean squared error"
     final_activation_and_prime = [ACTIVATIONS.reLU, ACTIVATIONS.reLU_primed]
+    #final_activation_and_prime = [ACTIVATIONS.none, ACTIVATIONS.none_primed]
     loss_function_and_prime = [LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed]
 elif loss_type == "categorical cross entropy":
-    name_abrigged = "mnist dnn categorical cross entropy"
+    name_abrigged = application + " dnn categorical cross entropy"
     loss_function_and_prime=[LOSS_FUNCTIONS.cross_entropy, LOSS_FUNCTIONS.cross_entropy_primed]
     final_activation_and_prime=[ACTIVATIONS.softmax, ACTIVATIONS.softmax_primed]
 
@@ -1179,12 +1238,11 @@ Main.hone_champ(full_name)
 
 """
     solve mnist with mse
-        the gradient doesnt seem to be strong with many layers 
-            Examine numerical stability of gradients partials 
-                backpropagation is a sequential operation. Check if the gradient gets weaker with earlier layers 
+        switch to dream mnist train and use
         refactor so champ is a singleton for each data set
         multi thread iterations then converge every x iterations. x as 10^3 for default
 
+    For polymorphism. Add loss primes as loss in terms of preactivation final. do not mix loss of regulizer with loss output. dirty. call seperatly 
 
     examine why lock is allowing bad change
         I think i fixed this. zero drop out before investigating. erase this task if lock on and all output shows semi loss going down 
@@ -1208,9 +1266,15 @@ Main.hone_champ(full_name)
     add a simple logger class 
         add line method. it adds line to str then print that line. So we can store log
 
-    Optimizations:
-       
-
-    dnn = DNN(neurons_per_layer, data=data, final_activation_and_prime=[ACTIVATIONS.none, ACTIVATIONS.none], loss_function_and_prime=[LOSS_FUNCTIONS.mean_squared_error, LOSS_FUNCTIONS.mean_squared_error_primed])
+    Caveouts 
+        Classification with mse, using deep nets doesnt work. 
+            A massive local minimum is found. The nets try to zero out then use bias alone in the last layer inorder to fit the batch mode classification. 
+                This is because 0 on all categories produces no loss, except in one category. 
+        With categorical cross entropy and very deep networks the gradient goes to zero. Not at first though.
+            Its NOT because of sequential floating matmuls producing numerical instability. 
+            Matrix multiplication is NOT the same as multiplication. The relu and prime are not zeroing out the net like you would think. 
+                The issue is that the net produces too many negatives in the last 4 layers. In the flow. The flow zeros. That will of course zero the gradient consequently
+            unknown cause. Moving on.
+            Possible solutions. Leaky Relu, Residual connections, train concate new layer of all 1's train again etc 
 
 """
