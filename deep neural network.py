@@ -1,6 +1,6 @@
 import numpy as np_ #   Numpy uses the CPU. Its slower, but the library appears more stable, and better exception handeling 
 from PIL import Image, ImageOps, ImageFilter # Used to debug images. Optional 
-import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occures making tracing harder then Numpy
+import cupy as np # CuPy deffinitly speeds up operations. For example it does not explain when overflow occured making tracing harder than Numpy
 import time #   Used to time program speed. Optional 
 import shelve  
 import os
