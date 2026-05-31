@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="360" viewBox="0 0 1100 360" role="img" aria-label="Math engine formula z-score probability and weights">
+
+<style>
+  .bg{fill:#08111f}.panel{fill:#111827;stroke:#38bdf8;stroke-width:3}.panel2{fill:#17112d;stroke:#a855f7;stroke-width:3}
+  .grid{stroke:#243b63;stroke-width:1}.cyan{fill:#22d3ee}.pink{fill:#f472b6}.yellow{fill:#fde047}.green{fill:#4ade80}.purple{fill:#a78bfa}.orange{fill:#fb923c}.white{fill:#e5f2ff}.muted{fill:#94a3b8}
+  .title{font-family:Arial,sans-serif;font-weight:700;font-size:44px}.sub{font-family:Arial,sans-serif;font-weight:700;font-size:22px}.small{font-family:Arial,sans-serif;font-weight:600;font-size:16px}.tiny{font-family:Arial,sans-serif;font-weight:600;font-size:12px}.mono{font-family:'Courier New',monospace;font-weight:700;font-size:18px}.monoSmall{font-family:'Courier New',monospace;font-weight:700;font-size:13px}
+</style>
+
+<rect width="1100" height="360" rx="28" class="bg"/>
+<text x="55" y="55" class="title white">Math Engine</text>
+<rect x="60" y="95" width="460" height="205" rx="22" class="panel"/>
+<text x="95" y="145" class="sub cyan">z-score</text>
+<text x="95" y="190" class="mono white">z = (post_avg - pre_avg)</text>
+<text x="171" y="224" class="mono yellow">/ pre_std</text>
+<text x="95" y="262" class="small muted">How strange is the post-coach average compared to the pre-coach world?</text>
+<rect x="590" y="95" width="450" height="205" rx="22" class="panel2"/>
+<text x="625" y="145" class="sub pink">weighted signal</text>
+<text x="625" y="190" class="mono white">importance × change × probability</text>
+<text x="625" y="235" class="small muted">Kills matter more. Damage taken is negative. Random-looking noise gets punished.</text>
+</svg>
