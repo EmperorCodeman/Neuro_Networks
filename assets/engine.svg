@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="285" viewBox="0 0 1200 285" role="img" aria-label="Main systems in the neural-network framework">
+<defs>
+  <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+    <stop offset="0%" stop-color="#07111f"/>
+    <stop offset="55%" stop-color="#0f1933"/>
+    <stop offset="100%" stop-color="#05080f"/>
+  </linearGradient>
+  <linearGradient id="line" x1="0" x2="1">
+    <stop offset="0%" stop-color="#27d7ff"/>
+    <stop offset="50%" stop-color="#b86cff"/>
+    <stop offset="100%" stop-color="#ffd166"/>
+  </linearGradient>
+  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="3" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+    <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#244169" stroke-width="1" opacity="0.38"/>
+  </pattern>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#27d7ff"/></marker>
+  <marker id="arrow2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#ffd166"/></marker>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+    .h { font-size: 46px; font-weight: 900; fill: #f7fbff; letter-spacing: 1.5px; }
+    .sub { font-size: 22px; fill: #cfeaff; }
+    .small { font-size: 17px; fill: #d7e9ff; }
+    .micro { font-size: 14px; fill: #d7e9ff; }
+    .dark { fill:#07111f; }
+  </style>
+</defs>
+<rect width="1200" height="285" fill="url(#bg)"/>
+<rect width="1200" height="285" fill="url(#grid)"/>
+<text x="600" y="52" class="t h" text-anchor="middle">ENGINE PIECES</text>
+<rect x="70" y="92" width="320" height="58" rx="14" fill="#0b1730" stroke="#27d7ff" stroke-width="2" opacity="1"/>
+<text x="88" y="117" class="t small" text-anchor="start">DNN CLASS</text>
+<text x="88" y="140" class="t micro" text-anchor="start">configurable layers, weights, biases</text>
+<rect x="440" y="92" width="320" height="58" rx="14" fill="#0b1730" stroke="#74e39a" stroke-width="2" opacity="1"/>
+<text x="458" y="117" class="t small" text-anchor="start">ACTIVATIONS</text>
+<text x="458" y="140" class="t micro" text-anchor="start">ReLU hidden layers + softmax output</text>
+<rect x="810" y="92" width="320" height="58" rx="14" fill="#0b1730" stroke="#ff7aa2" stroke-width="2" opacity="1"/>
+<text x="828" y="117" class="t small" text-anchor="start">LOSS</text>
+<text x="828" y="140" class="t micro" text-anchor="start">cross entropy, MSE, regularizer</text>
+<rect x="70" y="178" width="320" height="58" rx="14" fill="#0b1730" stroke="#ffd166" stroke-width="2" opacity="1"/>
+<text x="88" y="203" class="t small" text-anchor="start">BACKPROP</text>
+<text x="88" y="226" class="t micro" text-anchor="start">manual chain-rule gradients</text>
+<rect x="440" y="178" width="320" height="58" rx="14" fill="#0b1730" stroke="#b86cff" stroke-width="2" opacity="1"/>
+<text x="458" y="203" class="t small" text-anchor="start">DROPOUT</text>
+<text x="458" y="226" class="t micro" text-anchor="start">train through missing neurons</text>
+<rect x="810" y="178" width="320" height="58" rx="14" fill="#0b1730" stroke="#27d7ff" stroke-width="2" opacity="1"/>
+<text x="828" y="203" class="t small" text-anchor="start">PERSISTENCE</text>
+<text x="828" y="226" class="t micro" text-anchor="start">save champion nets with shelve</text>
+</svg>

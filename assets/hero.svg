@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-label="MNIST from scratch neural network hero">
+<defs>
+  <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+    <stop offset="0%" stop-color="#07111f"/>
+    <stop offset="55%" stop-color="#0f1933"/>
+    <stop offset="100%" stop-color="#05080f"/>
+  </linearGradient>
+  <linearGradient id="line" x1="0" x2="1">
+    <stop offset="0%" stop-color="#27d7ff"/>
+    <stop offset="50%" stop-color="#b86cff"/>
+    <stop offset="100%" stop-color="#ffd166"/>
+  </linearGradient>
+  <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+    <feGaussianBlur stdDeviation="3" result="blur"/>
+    <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+  </filter>
+  <pattern id="grid" width="36" height="36" patternUnits="userSpaceOnUse">
+    <path d="M 36 0 L 0 0 0 36" fill="none" stroke="#244169" stroke-width="1" opacity="0.38"/>
+  </pattern>
+  <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#27d7ff"/></marker>
+  <marker id="arrow2" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L0,6 L9,3 z" fill="#ffd166"/></marker>
+  <style>
+    .t { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace; }
+    .h { font-size: 46px; font-weight: 900; fill: #f7fbff; letter-spacing: 1.5px; }
+    .sub { font-size: 22px; fill: #cfeaff; }
+    .small { font-size: 17px; fill: #d7e9ff; }
+    .micro { font-size: 14px; fill: #d7e9ff; }
+    .dark { fill:#07111f; }
+  </style>
+</defs>
+<rect width="1200" height="300" fill="url(#bg)"/>
+<rect width="1200" height="300" fill="url(#grid)"/>
+<text x="600" y="62" class="t h" text-anchor="middle">MNIST FROM SCRATCH</text>
+<text x="600" y="101" class="t sub" text-anchor="middle">A handwritten digit classifier built by implementing the learning engine directly.</text>
+<text x="600" y="132" class="t small" text-anchor="middle">28x28 pixels -&gt; tensors -&gt; layers -&gt; loss -&gt; gradients -&gt; trained digit prediction</text>
+<rect x="70" y="165" width="250" height="90" rx="18" fill="#0b1730" stroke="#27d7ff" stroke-width="3" opacity="1"/>
+<text x="195" y="194" class="t small" text-anchor="middle">INPUT IMAGE</text>
+<rect x="118" y="205" width="7" height="7" fill="#17254a"/><rect x="126" y="205" width="7" height="7" fill="#27d7ff"/><rect x="134" y="205" width="7" height="7" fill="#27d7ff"/><rect x="142" y="205" width="7" height="7" fill="#27d7ff"/><rect x="150" y="205" width="7" height="7" fill="#27d7ff"/><rect x="158" y="205" width="7" height="7" fill="#17254a"/><rect x="166" y="205" width="7" height="7" fill="#17254a"/><rect x="118" y="213" width="7" height="7" fill="#27d7ff"/><rect x="126" y="213" width="7" height="7" fill="#17254a"/><rect x="134" y="213" width="7" height="7" fill="#17254a"/><rect x="142" y="213" width="7" height="7" fill="#17254a"/><rect x="150" y="213" width="7" height="7" fill="#17254a"/><rect x="158" y="213" width="7" height="7" fill="#27d7ff"/><rect x="166" y="213" width="7" height="7" fill="#17254a"/><rect x="118" y="221" width="7" height="7" fill="#17254a"/><rect x="126" y="221" width="7" height="7" fill="#17254a"/><rect x="134" y="221" width="7" height="7" fill="#17254a"/><rect x="142" y="221" width="7" height="7" fill="#17254a"/><rect x="150" y="221" width="7" height="7" fill="#17254a"/><rect x="158" y="221" width="7" height="7" fill="#27d7ff"/><rect x="166" y="221" width="7" height="7" fill="#17254a"/><rect x="118" y="229" width="7" height="7" fill="#17254a"/><rect x="126" y="229" width="7" height="7" fill="#17254a"/><rect x="134" y="229" width="7" height="7" fill="#27d7ff"/><rect x="142" y="229" width="7" height="7" fill="#27d7ff"/><rect x="150" y="229" width="7" height="7" fill="#27d7ff"/><rect x="158" y="229" width="7" height="7" fill="#17254a"/><rect x="166" y="229" width="7" height="7" fill="#17254a"/><rect x="118" y="237" width="7" height="7" fill="#17254a"/><rect x="126" y="237" width="7" height="7" fill="#17254a"/><rect x="134" y="237" width="7" height="7" fill="#17254a"/><rect x="142" y="237" width="7" height="7" fill="#17254a"/><rect x="150" y="237" width="7" height="7" fill="#17254a"/><rect x="158" y="237" width="7" height="7" fill="#27d7ff"/><rect x="166" y="237" width="7" height="7" fill="#17254a"/><rect x="118" y="245" width="7" height="7" fill="#27d7ff"/><rect x="126" y="245" width="7" height="7" fill="#17254a"/><rect x="134" y="245" width="7" height="7" fill="#17254a"/><rect x="142" y="245" width="7" height="7" fill="#17254a"/><rect x="150" y="245" width="7" height="7" fill="#17254a"/><rect x="158" y="245" width="7" height="7" fill="#27d7ff"/><rect x="166" y="245" width="7" height="7" fill="#17254a"/><rect x="118" y="253" width="7" height="7" fill="#17254a"/><rect x="126" y="253" width="7" height="7" fill="#27d7ff"/><rect x="134" y="253" width="7" height="7" fill="#27d7ff"/><rect x="142" y="253" width="7" height="7" fill="#27d7ff"/><rect x="150" y="253" width="7" height="7" fill="#27d7ff"/><rect x="158" y="253" width="7" height="7" fill="#17254a"/><rect x="166" y="253" width="7" height="7" fill="#17254a"/><text x="245" y="231" class="t micro" text-anchor="middle">28 x 28 = 784 values</text>
+<rect x="475" y="165" width="250" height="90" rx="18" fill="#0b1730" stroke="#b86cff" stroke-width="3" opacity="1"/>
+<text x="600" y="195" class="t small" text-anchor="middle">CUSTOM DNN</text>
+<text x="600" y="226" class="t micro" text-anchor="middle">ReLU + softmax + backprop</text>
+<rect x="880" y="165" width="250" height="90" rx="18" fill="#0b1730" stroke="#ffd166" stroke-width="3" opacity="1"/>
+<text x="1005" y="195" class="t small" text-anchor="middle">OUTPUT VOTE</text>
+<rect x="930" y="224" width="10" height="12" fill="#27d7ff" opacity="0.9"/><rect x="945" y="217" width="10" height="19" fill="#27d7ff" opacity="0.9"/><rect x="960" y="210" width="10" height="26" fill="#27d7ff" opacity="0.9"/><rect x="975" y="176" width="10" height="60" fill="#ffd166" opacity="0.9"/><rect x="990" y="221" width="10" height="15" fill="#27d7ff" opacity="0.9"/><rect x="1005" y="214" width="10" height="22" fill="#27d7ff" opacity="0.9"/><rect x="1020" y="207" width="10" height="29" fill="#27d7ff" opacity="0.9"/><rect x="1035" y="200" width="10" height="36" fill="#27d7ff" opacity="0.9"/><rect x="1050" y="218" width="10" height="18" fill="#27d7ff" opacity="0.9"/><rect x="1065" y="211" width="10" height="25" fill="#27d7ff" opacity="0.9"/><text x="1005" y="239" class="t micro" text-anchor="middle">argmax -&gt; predicted digit</text>
+<path d="M 332 210 L 457 210" stroke="#27d7ff" stroke-width="4" fill="none" marker-end="url(#arrow)"/><path d="M 738 210 L 862 210" stroke="#ffd166" stroke-width="4" fill="none" marker-end="url(#arrow)"/></svg>
